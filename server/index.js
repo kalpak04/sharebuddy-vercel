@@ -8,8 +8,6 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET;
 
-const token = jwt.sign({ userID: user.id}, JWT_SECRET, { expiresIn: '1h' });
-
 const app = express();
 app.use(cors({
  origin: 'https://sharebuddy-vercel.vercel.app',
