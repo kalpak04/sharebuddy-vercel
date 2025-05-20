@@ -9,7 +9,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(cors({
- origin: 'https://sharebuddy-vercel.vercel.app/',
+ origin: 'https://sharebuddy-vercel.vercel.app',
     methods: ['GET', 'POST'] 
 }));
 
