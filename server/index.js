@@ -6,7 +6,10 @@ const { Server } = require('socket.io');
 const { Pool } = require('pg');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+ origin: 'https://sharebuddy-vercel.vercel.app/',
+    methods: ['GET', 'POST'] 
+}));
 
 const server = http.createServer(app);
 const io = new Server(server, {
