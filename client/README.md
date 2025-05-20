@@ -1,3 +1,40 @@
+# ShareBuddy Client (Web App)
+
+## Setup
+
+1. Install dependencies:
+   ```sh
+   npm install
+   ```
+2. Start the development server:
+   ```sh
+   npm start
+   ```
+3. Build for production:
+   ```sh
+   npm run build
+   ```
+
+## Environment Variables
+- Update the backend signaling server URL in `App.tsx` as needed.
+
+## Troubleshooting
+- If you see CORS errors, ensure the backend CORS config matches your frontend URL.
+- If file transfer stalls, check:
+  - Both host and renter are online and using the same backend.
+  - WebRTC connection (try on the same network first).
+  - TURN server is reachable (see ICE config in `App.tsx`).
+- For browser issues, use Chrome and check `chrome://webrtc-internals` for debugging.
+
+## Security Notes
+- Files are encrypted in the browser before transfer (AES).
+- For production, use a per-transfer encryption key and secure signaling.
+- No user authentication by default; add as needed for your use case.
+- Geolocation is only used for host discovery and is never stored precisely.
+
+## Contributing
+- PRs welcome! Please add tests and update documentation as needed.
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
@@ -31,13 +68,13 @@ See the section about [deployment](https://facebook.github.io/create-react-app/d
 
 ### `npm run eject`
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+**Note: this is a one-way operation. Once you `eject`, you can't go back!**
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
 ## Learn More
 

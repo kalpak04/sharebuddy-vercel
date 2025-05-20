@@ -25,6 +25,11 @@ const HostDashboard = () => {
   const [peerSocketId, setPeerSocketId] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
   const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
+  const [auth, setAuth] = useState(null);
+  const [authMode, setAuthMode] = useState('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
 
   const PRIVACY_NOTICE = `To help renters find your device, ShareBuddy will use your approximate location (city-level, never your exact address) via a secure IP geolocation service. Your location is only used for matching and never shared with third parties.`;
 
@@ -63,6 +68,19 @@ const HostDashboard = () => {
     }
   }
 
+  // Auth API
+  const handleAuth = async () => {
+    setAuthError('');
+    try {
+      const res = await axios.post(`${SOCKET_URL}/${authMode}`, { email: authEmail, password: authPassword });
+      setAuth({ token: res.data.token, email: res.data.email });
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err) {
+      setAuthError(err.response?.data?.error || 'Auth failed');
+    }
+  };
+
   // Go Online: connect to backend and listen for file transfers
   const goOnline = async () => {
     if (!folder || !reserved) {
@@ -79,7 +97,7 @@ const HostDashboard = () => {
       setStatus(geoError);
       return;
     }
-    const s = io(SOCKET_URL, { transports: ['websocket'] });
+    const s = io(SOCKET_URL, { auth: { token: auth?.token }, transports: ['websocket'] });
     setSocket(s);
     setOnline(true);
     setStatus('Online and waiting for renters...');
@@ -131,7 +149,8 @@ const HostDashboard = () => {
   const setupPeerConnection = async (targetSocketId) => {
     peerConnection.current = new window.RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
       ]
     });
     peerConnection.current.onicecandidate = (event) => {
@@ -158,11 +177,36 @@ const HostDashboard = () => {
       setReceivedFile(blob);
       setTransferMsg('File received and decrypted!');
       setStatus('File received and decrypted!');
+      // File type/size validation
+      if (connRequest) {
+        const maxSize = parseInt(reserved, 10) * 1024 * 1024;
+        if (connRequest.size > maxSize) {
+          setStatus('File exceeds reserved storage quota.');
+          setToast({ open: true, message: 'File exceeds reserved storage quota.', severity: 'error' });
+          receivedChunks = [];
+          setProgress(0);
+          return;
+        }
+        const allowedTypes = ['pdf', 'txt', 'jpg', 'png', 'jpeg', 'docx'];
+        const ext = connRequest.filename.split('.').pop().toLowerCase();
+        if (!allowedTypes.includes(ext)) {
+          setStatus('File type not allowed.');
+          setToast({ open: true, message: 'File type not allowed.', severity: 'error' });
+          receivedChunks = [];
+          setProgress(0);
+          return;
+        }
+      }
       // Save file to disk
-      if (window.electronAPI && window.electronAPI.saveFile && connRequest) {
-        await window.electronAPI.saveFile(folder, connRequest.filename, blob);
-        setStoredFiles(prev => [...prev, { name: connRequest.filename, size: connRequest.size }]);
-        setStatus(`File saved: ${connRequest.filename}`);
+      try {
+        if (window.electronAPI && window.electronAPI.saveFile && connRequest) {
+          await window.electronAPI.saveFile(folder, connRequest.filename, blob);
+          setStoredFiles(prev => [...prev, { name: connRequest.filename, size: connRequest.size }]);
+          setStatus(`File saved: ${connRequest.filename}`);
+        }
+      } catch (err) {
+        setStatus('Error saving file.');
+        setToast({ open: true, message: 'Error saving file.', severity: 'error' });
       }
       receivedChunks = [];
       setProgress(100);
@@ -190,6 +234,45 @@ const HostDashboard = () => {
   }
 
   const handleToastClose = () => setToast({ ...toast, open: false });
+
+  // Attach JWT to socket.io connection
+  useEffect(() => {
+    if (!auth) return;
+    const s = io(SOCKET_URL, { auth: { token: auth.token } });
+    setSocket(s);
+    s.on('connection-request', async (data) => {
+      setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
+      setConnRequest(data);
+      setPeerSocketId(data.from);
+      s.emit('connection-response', { target: data.from, accept: true });
+      await setupPeerConnection(data.from);
+      setTransferMsg('Setting up connection...');
+    });
+    return () => { s.disconnect(); };
+  }, [auth]);
+
+  // Main UI
+  if (!auth) {
+    return (
+      <Container maxWidth="sm" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 6, backdropFilter: 'blur(8px)', background: darkMode ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.85)', boxShadow: '0 8px 32px 0 rgba(31,38,135,0.37)', minWidth: 340 }}>
+          <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
+            <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy Host</Typography>
+            <Typography variant="subtitle1" color="text.secondary" gutterBottom>Login or Register to continue</Typography>
+          </Box>
+          <TextField label="Email" type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} fullWidth sx={{ mb: 2 }} autoFocus />
+          <TextField label="Password" type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} fullWidth sx={{ mb: 2 }} />
+          {authError && <Typography color="error" sx={{ mb: 2 }}>{authError}</Typography>}
+          <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={handleAuth}>
+            {authMode === 'login' ? 'Login' : 'Register'}
+          </Button>
+          <Button fullWidth onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} color="secondary">
+            {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
+          </Button>
+        </Paper>
+      </Container>
+    );
+  }
 
   return (
     <Container maxWidth="sm" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>

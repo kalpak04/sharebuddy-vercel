@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Box, Button, Typography, Paper, Container, Grid, TextField, Avatar, CircularProgress, List, ListItem, ListItemText, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
+import { Box, Button, Typography, Paper, Container, Grid, TextField, Avatar, CircularProgress, List, ListItem, ListItemText, Dialog, DialogTitle, DialogContent, DialogActions, ThemeProvider, createTheme, CssBaseline, Switch, FormControlLabel } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import StorageIcon from '@mui/icons-material/Storage';
 import BackupIcon from '@mui/icons-material/Backup';
@@ -42,10 +42,55 @@ const App: React.FC = () => {
   const [connRequest, setConnRequest] = useState<ConnectionRequest | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [selectedHost, setSelectedHost] = useState<any | null>(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [auth, setAuth] = useState<{ token: string; email: string } | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+
+  const theme = createTheme({
+    palette: {
+      mode: darkMode ? 'dark' : 'light',
+      primary: { main: '#1976d2' },
+      secondary: { main: '#00bfae' },
+      background: {
+        default: darkMode ? '#181c24' : '#f4f7fa',
+        paper: darkMode ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.85)'
+      }
+    },
+    shape: { borderRadius: 12 },
+    typography: {
+      fontFamily: 'Inter, Roboto, Arial, sans-serif',
+      h4: { fontWeight: 800, letterSpacing: '-1px' },
+      subtitle1: { fontWeight: 500 },
+      button: { textTransform: 'none', fontWeight: 600 }
+    }
+  });
+
+  // Auth API
+  const handleAuth = async () => {
+    setAuthError('');
+    try {
+      const res = await fetch(`${SOCKET_URL}/${authMode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Auth failed');
+      setAuth({ token: data.token, email: data.email });
+      setAuthEmail('');
+      setAuthPassword('');
+    } catch (err: any) {
+      setAuthError(err.message);
+    }
+  };
 
   // Connect to backend on mount
   useEffect(() => {
-    const s = io(SOCKET_URL);
+    if (!auth) return;
+    const s = io(SOCKET_URL, { auth: { token: auth.token } });
     setSocket(s);
     s.on('hosts-update', setHosts);
     s.on('renters-update', setRenters);
@@ -54,7 +99,7 @@ const App: React.FC = () => {
     s.on(RESPONSE_EVENT, handleConnectionResponse);
     return () => { s.disconnect(); };
     // eslint-disable-next-line
-  }, []);
+  }, [auth]);
 
   // --- WebRTC Signaling Logic ---
   const handleSignal = async (payload: any) => {
@@ -161,7 +206,8 @@ const App: React.FC = () => {
   const setupPeerConnection = async (myRole: PeerRole, targetSocketId: string) => {
     peerConnection.current = new RTCPeerConnection({
       iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' }
       ]
     });
     peerConnection.current.onicecandidate = (event) => {
@@ -270,189 +316,224 @@ const App: React.FC = () => {
   };
 
   // Main UI
+  if (!auth) {
+    return (
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minHeight: '100vh', justifyContent: 'center', background: darkMode ? 'linear-gradient(135deg, #232526 0%, #414345 100%)' : 'linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%)' }}>
+          <Paper elevation={6} sx={{ p: 4, borderRadius: 4, minWidth: 340 }}>
+            <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
+              <Avatar src={logo} sx={{ width: 64, height: 64, mb: 1 }} />
+              <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy</Typography>
+              <Typography variant="subtitle1" color="text.secondary" gutterBottom>Login or Register to continue</Typography>
+            </Box>
+            <TextField label="Email" type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} fullWidth sx={{ mb: 2 }} autoFocus />
+            <TextField label="Password" type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} fullWidth sx={{ mb: 2 }} />
+            {authError && <Typography color="error" sx={{ mb: 2 }}>{authError}</Typography>}
+            <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={handleAuth}>
+              {authMode === 'login' ? 'Login' : 'Register'}
+            </Button>
+            <Button fullWidth onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} color="secondary">
+              {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
+            </Button>
+          </Paper>
+        </Box>
+      </ThemeProvider>
+    );
+  }
+
   return (
-    <Container maxWidth="sm" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-      <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 4 }}>
-        <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
-          <Avatar src={logo} sx={{ width: 64, height: 64, mb: 1 }} />
-          <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy</Typography>
-          <Typography variant="subtitle1" color="text.secondary" gutterBottom>
-            Affordable, Secure, Peer-to-Peer Storage
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minHeight: '100vh', background: darkMode ? 'linear-gradient(135deg, #232526 0%, #414345 100%)' : 'linear-gradient(135deg, #e0eafc 0%, #cfdef3 100%)' }}>
+        <Box sx={{ width: '100%', display: 'flex', justifyContent: 'flex-end', p: 2 }}>
+          <FormControlLabel
+            control={<Switch checked={darkMode} onChange={() => setDarkMode(!darkMode)} />}
+            label={darkMode ? 'Dark Mode' : 'Light Mode'}
+          />
+        </Box>
+        <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 4 }}>
+          <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
+            <Avatar src={logo} sx={{ width: 64, height: 64, mb: 1 }} />
+            <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy</Typography>
+            <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+              Affordable, Secure, Peer-to-Peer Storage
+            </Typography>
+          </Box>
+          {step === 'choose' && (
+            <>
+              <Typography align="center" mb={3}>
+                Free up space or earn by sharing yours. Choose your role to get started:
+              </Typography>
+              <Grid container spacing={2} justifyContent="center">
+                <Grid item xs={12} sm={6}>
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    startIcon={<StorageIcon />}
+                    onClick={() => { setRole('host'); setStep('host-wait'); }}
+                  >
+                    Offer Storage
+                  </Button>
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <Button
+                    fullWidth
+                    variant="outlined"
+                    color="primary"
+                    size="large"
+                    startIcon={<BackupIcon />}
+                    onClick={() => { setRole('renter'); setStep('renter-wait'); }}
+                  >
+                    Need Storage
+                  </Button>
+                </Grid>
+              </Grid>
+            </>
+          )}
+          {role === 'host' && step === 'host-wait' && (
+            <Box mt={3}>
+              {!status && (
+                <>
+                  <Typography variant="h6" gutterBottom>Become a Storage Host</Typography>
+                  <TextField
+                    label="Available Space (GB)"
+                    type="number"
+                    value={storage}
+                    onChange={e => setStorage(e.target.value)}
+                    fullWidth
+                    sx={{ mb: 2 }}
+                  />
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    onClick={goOnlineAsHost}
+                    sx={{ mb: 2 }}
+                    disabled={loading || !storage}
+                  >
+                    {loading ? <CircularProgress size={24} /> : 'Go Online'}
+                  </Button>
+                  <Button fullWidth onClick={reset} color="secondary">Back</Button>
+                </>
+              )}
+              {status && (
+                <>
+                  <Typography variant="h6" color="primary" gutterBottom>You are online as a host!</Typography>
+                  <Typography color="text.secondary">Waiting for renters to connect...</Typography>
+                  <Box mt={2}>
+                    <Typography variant="subtitle2">Active Renters:</Typography>
+                    <List>
+                      {renters.length === 0 && <ListItem><ListItemText primary="No renters online yet." /></ListItem>}
+                      {renters.map((r, i) => (
+                        <ListItem key={r.id || i} divider>
+                          <ListItemText primary={r.filename ? `${r.filename} (${r.size} bytes)` : `Renter #${i + 1}`} />
+                        </ListItem>
+                      ))}
+                    </List>
+                  </Box>
+                  <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Go Offline</Button>
+                </>
+              )}
+            </Box>
+          )}
+          {role === 'renter' && step === 'renter-wait' && (
+            <Box mt={3}>
+              {!status && (
+                <>
+                  <Typography variant="h6" gutterBottom>Need Extra Storage?</Typography>
+                  <Button
+                    variant="outlined"
+                    component="label"
+                    startIcon={<CloudUploadIcon />}
+                    fullWidth
+                    sx={{ mb: 2 }}
+                  >
+                    {file ? file.name : 'Upload File'}
+                    <input type="file" hidden onChange={handleFileChange} />
+                  </Button>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    fullWidth
+                    disabled={!file || loading}
+                    onClick={findStorage}
+                    sx={{ mb: 2 }}
+                  >
+                    {loading ? <CircularProgress size={24} /> : 'Find Storage'}
+                  </Button>
+                  <Button fullWidth onClick={reset} color="secondary">Back</Button>
+                </>
+              )}
+              {status && (
+                <>
+                  <Typography variant="h6" color="primary" gutterBottom>{status}</Typography>
+                  <Box mt={2}>
+                    <Typography variant="subtitle2">Nearby Hosts:</Typography>
+                    <List>
+                      {hosts.length === 0 && <ListItem><ListItemText primary="No hosts nearby." /></ListItem>}
+                      {hosts.map((h, i) => (
+                        <ListItem key={h.id || i} divider button selected={selectedHost?.socket_id === h.socket_id} onClick={() => connectToHost(h)}>
+                          <ListItemText primary={`Host #${i + 1} (${h.storage} GB)`} secondary={`Distance: ${h.distance ? h.distance.toFixed(2) : '?'} km`} />
+                        </ListItem>
+                      ))}
+                    </List>
+                  </Box>
+                  <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Cancel</Button>
+                </>
+              )}
+            </Box>
+          )}
+          {step === 'transfer' && (
+            <Box mt={3}>
+              <Typography variant="h6" color="primary" gutterBottom>Transferring File...</Typography>
+              <Typography color="text.secondary">{transferMsg}</Typography>
+              <Box mt={2}>
+                <CircularProgress variant="determinate" value={progress} />
+                <Typography mt={1}>{progress}%</Typography>
+              </Box>
+              <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Cancel</Button>
+            </Box>
+          )}
+          {step === 'done' && (
+            <Box mt={3}>
+              <Typography variant="h6" color="primary" gutterBottom>Transfer Complete!</Typography>
+              <Typography color="text.secondary">File transfer finished successfully.</Typography>
+              {receivedFile && (
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  sx={{ mt: 2 }}
+                  href={URL.createObjectURL(receivedFile)}
+                  download={file?.name || 'received_file'}
+                >
+                  Download Received File
+                </Button>
+              )}
+              <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Back to Home</Button>
+            </Box>
+          )}
+          <Dialog open={showDialog} onClose={() => respondToRequest(false)}>
+            <DialogTitle>Incoming Connection Request</DialogTitle>
+            <DialogContent>
+              <Typography>Renter wants to store: <b>{connRequest?.filename}</b> ({connRequest?.size} bytes)</Typography>
+              <Typography>Do you want to accept?</Typography>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => respondToRequest(false)} color="secondary">Decline</Button>
+              <Button onClick={() => respondToRequest(true)} color="primary" autoFocus>Accept</Button>
+            </DialogActions>
+          </Dialog>
+        </Paper>
+        <Box mt={4} textAlign="center">
+          <Typography variant="caption" color="text.secondary">
+            &copy; {new Date().getFullYear()} ShareBuddy. All rights reserved.
           </Typography>
         </Box>
-        {step === 'choose' && (
-          <>
-            <Typography align="center" mb={3}>
-              Free up space or earn by sharing yours. Choose your role to get started:
-            </Typography>
-            <Grid container spacing={2} justifyContent="center">
-              <Grid item xs={12} sm={6}>
-                <Button
-                  fullWidth
-                  variant="contained"
-                  color="primary"
-                  size="large"
-                  startIcon={<StorageIcon />}
-                  onClick={() => { setRole('host'); setStep('host-wait'); }}
-                >
-                  Offer Storage
-                </Button>
-              </Grid>
-              <Grid item xs={12} sm={6}>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  color="primary"
-                  size="large"
-                  startIcon={<BackupIcon />}
-                  onClick={() => { setRole('renter'); setStep('renter-wait'); }}
-                >
-                  Need Storage
-                </Button>
-              </Grid>
-            </Grid>
-          </>
-        )}
-        {role === 'host' && step === 'host-wait' && (
-          <Box mt={3}>
-            {!status && (
-              <>
-                <Typography variant="h6" gutterBottom>Become a Storage Host</Typography>
-                <TextField
-                  label="Available Space (GB)"
-                  type="number"
-                  value={storage}
-                  onChange={e => setStorage(e.target.value)}
-                  fullWidth
-                  sx={{ mb: 2 }}
-                />
-                <Button
-                  variant="contained"
-                  color="primary"
-                  fullWidth
-                  onClick={goOnlineAsHost}
-                  sx={{ mb: 2 }}
-                  disabled={loading || !storage}
-                >
-                  {loading ? <CircularProgress size={24} /> : 'Go Online'}
-                </Button>
-                <Button fullWidth onClick={reset} color="secondary">Back</Button>
-              </>
-            )}
-            {status && (
-              <>
-                <Typography variant="h6" color="primary" gutterBottom>You are online as a host!</Typography>
-                <Typography color="text.secondary">Waiting for renters to connect...</Typography>
-                <Box mt={2}>
-                  <Typography variant="subtitle2">Active Renters:</Typography>
-                  <List>
-                    {renters.length === 0 && <ListItem><ListItemText primary="No renters online yet." /></ListItem>}
-                    {renters.map((r, i) => (
-                      <ListItem key={r.id || i} divider>
-                        <ListItemText primary={r.filename ? `${r.filename} (${r.size} bytes)` : `Renter #${i + 1}`} />
-                      </ListItem>
-                    ))}
-                  </List>
-                </Box>
-                <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Go Offline</Button>
-              </>
-            )}
-          </Box>
-        )}
-        {role === 'renter' && step === 'renter-wait' && (
-          <Box mt={3}>
-            {!status && (
-              <>
-                <Typography variant="h6" gutterBottom>Need Extra Storage?</Typography>
-                <Button
-                  variant="outlined"
-                  component="label"
-                  startIcon={<CloudUploadIcon />}
-                  fullWidth
-                  sx={{ mb: 2 }}
-                >
-                  {file ? file.name : 'Upload File'}
-                  <input type="file" hidden onChange={handleFileChange} />
-                </Button>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  fullWidth
-                  disabled={!file || loading}
-                  onClick={findStorage}
-                  sx={{ mb: 2 }}
-                >
-                  {loading ? <CircularProgress size={24} /> : 'Find Storage'}
-                </Button>
-                <Button fullWidth onClick={reset} color="secondary">Back</Button>
-              </>
-            )}
-            {status && (
-              <>
-                <Typography variant="h6" color="primary" gutterBottom>{status}</Typography>
-                <Box mt={2}>
-                  <Typography variant="subtitle2">Nearby Hosts:</Typography>
-                  <List>
-                    {hosts.length === 0 && <ListItem><ListItemText primary="No hosts nearby." /></ListItem>}
-                    {hosts.map((h, i) => (
-                      <ListItem key={h.id || i} divider button selected={selectedHost?.socket_id === h.socket_id} onClick={() => connectToHost(h)}>
-                        <ListItemText primary={`Host #${i + 1} (${h.storage} GB)`} secondary={`Distance: ${h.distance ? h.distance.toFixed(2) : '?'} km`} />
-                      </ListItem>
-                    ))}
-                  </List>
-                </Box>
-                <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Cancel</Button>
-              </>
-            )}
-          </Box>
-        )}
-        {step === 'transfer' && (
-          <Box mt={3}>
-            <Typography variant="h6" color="primary" gutterBottom>Transferring File...</Typography>
-            <Typography color="text.secondary">{transferMsg}</Typography>
-            <Box mt={2}>
-              <CircularProgress variant="determinate" value={progress} />
-              <Typography mt={1}>{progress}%</Typography>
-            </Box>
-            <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Cancel</Button>
-          </Box>
-        )}
-        {step === 'done' && (
-          <Box mt={3}>
-            <Typography variant="h6" color="primary" gutterBottom>Transfer Complete!</Typography>
-            <Typography color="text.secondary">File transfer finished successfully.</Typography>
-            {receivedFile && (
-              <Button
-                variant="outlined"
-                color="primary"
-                sx={{ mt: 2 }}
-                href={URL.createObjectURL(receivedFile)}
-                download={file?.name || 'received_file'}
-              >
-                Download Received File
-              </Button>
-            )}
-            <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Back to Home</Button>
-          </Box>
-        )}
-        <Dialog open={showDialog} onClose={() => respondToRequest(false)}>
-          <DialogTitle>Incoming Connection Request</DialogTitle>
-          <DialogContent>
-            <Typography>Renter wants to store: <b>{connRequest?.filename}</b> ({connRequest?.size} bytes)</Typography>
-            <Typography>Do you want to accept?</Typography>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => respondToRequest(false)} color="secondary">Decline</Button>
-            <Button onClick={() => respondToRequest(true)} color="primary" autoFocus>Accept</Button>
-          </DialogActions>
-        </Dialog>
-      </Paper>
-      <Box mt={4} textAlign="center">
-        <Typography variant="caption" color="text.secondary">
-          &copy; {new Date().getFullYear()} ShareBuddy. All rights reserved.
-        </Typography>
       </Box>
-    </Container>
+    </ThemeProvider>
   );
 };
 
