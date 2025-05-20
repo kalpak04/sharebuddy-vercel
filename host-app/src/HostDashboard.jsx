@@ -37,10 +37,10 @@ const HostDashboard = () => {
     try {
       setGeoLoading(true);
       setGeoError('');
-      // Use a privacy-respecting, rate-limited API
-      const response = await axios.get('https://ip-api.com/json/?fields=status,message,lat,lon,city,country');
-      if (response.data.status === 'success') {
-        return { latitude: response.data.lat, longitude: response.data.lon };
+      // Use ipwho.is, a free, no-auth API
+      const response = await axios.get('https://ipwho.is/');
+      if (response.data.success) {
+        return { latitude: response.data.latitude, longitude: response.data.longitude };
       } else {
         setGeoError('Geolocation failed: ' + response.data.message);
         return { latitude: null, longitude: null };
