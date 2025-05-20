@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Button, Typography, Paper, Container, TextField, List, ListItem, ListItemText } from '@mui/material';
 import { io } from 'socket.io-client';
+import axios from 'axios';
 
 const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com'; // Update with your backend URL
 
@@ -11,6 +12,11 @@ const HostDashboard = () => {
   const [online, setOnline] = useState(false);
   const [socket, setSocket] = useState(null);
   const [storedFiles, setStoredFiles] = useState([]);
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geoError, setGeoError] = useState('');
+
+  const PRIVACY_NOTICE = `To help renters find your device, ShareBuddy will use your approximate location (city-level, never your exact address) via a secure IP geolocation service. Your location is only used for matching and never shared with third parties.`;
 
   // Folder selection (Electron dialog)
   const selectFolder = async () => {
@@ -27,21 +33,51 @@ const HostDashboard = () => {
     }
   };
 
+  async function getGeolocation() {
+    try {
+      setGeoLoading(true);
+      setGeoError('');
+      // Use a privacy-respecting, rate-limited API
+      const response = await axios.get('https://ip-api.com/json/?fields=status,message,lat,lon,city,country');
+      if (response.data.status === 'success') {
+        return { latitude: response.data.lat, longitude: response.data.lon };
+      } else {
+        setGeoError('Geolocation failed: ' + response.data.message);
+        return { latitude: null, longitude: null };
+      }
+    } catch (error) {
+      setGeoError('Geolocation error: ' + error.message);
+      return { latitude: null, longitude: null };
+    } finally {
+      setGeoLoading(false);
+    }
+  }
+
   // Go Online: connect to backend and listen for file transfers
-  const goOnline = () => {
+  const goOnline = async () => {
     if (!folder || !reserved) {
       setStatus('Please select a folder and reserve space.');
       return;
     }
-    const s = io(SOCKET_URL);
+    if (!privacyAccepted) {
+      setStatus('You must accept the privacy notice to go online.');
+      return;
+    }
+    setStatus('Fetching location...');
+    const { latitude, longitude } = await getGeolocation();
+    if (geoError) {
+      setStatus(geoError);
+      return;
+    }
+    const s = io(SOCKET_URL, { transports: ['websocket'] });
     setSocket(s);
     setOnline(true);
     setStatus('Online and waiting for renters...');
-    s.emit('register-host', { storage: reserved, latitude: null, longitude: null });
-    // Listen for file transfer events (custom event, e.g., 'file-transfer')
+    // Log registration attempt
+    console.info('Registering host:', { reserved, latitude, longitude });
+    s.emit('register-host', { storage: reserved, latitude, longitude });
     s.on('file-transfer', async (data) => {
       setStatus(`Receiving file: ${data.filename}`);
-      // Save file to disk using Electron IPC (to be implemented in preload/main)
       if (window.electronAPI && window.electronAPI.saveFile) {
         await window.electronAPI.saveFile(folder, data.filename, data.fileBuffer);
         setStoredFiles(prev => [...prev, { name: data.filename, size: data.size }]);
@@ -72,9 +108,17 @@ const HostDashboard = () => {
           fullWidth
           sx={{ mb: 2 }}
         />
-        <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={goOnline} disabled={online}>
-          {online ? 'Online' : 'Go Online'}
+        <Box mb={2}>
+          <Typography variant="body2" color="text.secondary">{PRIVACY_NOTICE}</Typography>
+          <Box display="flex" alignItems="center">
+            <input type="checkbox" id="privacy" checked={privacyAccepted} onChange={e => setPrivacyAccepted(e.target.checked)} />
+            <label htmlFor="privacy" style={{ marginLeft: 8 }}>I understand and accept</label>
+          </Box>
+        </Box>
+        <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={goOnline} disabled={online || !privacyAccepted || geoLoading}>
+          {geoLoading ? 'Locating...' : (online ? 'Online' : 'Go Online')}
         </Button>
+        {geoError && <Typography color="error.main">{geoError}</Typography>}
         {status && <Typography color="info.main">{status}</Typography>}
         <Box mt={4}>
           <Typography variant="subtitle2">Stored Files:</Typography>
