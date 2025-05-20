@@ -160,7 +160,9 @@ const App: React.FC = () => {
   // --- Setup WebRTC Peer Connection ---
   const setupPeerConnection = async (myRole: PeerRole, targetSocketId: string) => {
     peerConnection.current = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
     });
     peerConnection.current.onicecandidate = (event) => {
       if (event.candidate) {
