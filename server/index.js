@@ -4,7 +4,7 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const { Pool } = require('pg');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const app = express();
