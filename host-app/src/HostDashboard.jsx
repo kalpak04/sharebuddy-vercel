@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Button, Typography, Paper, Container, TextField, List, ListItem, ListItemText } from '@mui/material';
+import React, { useState, useEffect, useRef } from 'react';
+import { Box, Button, Typography, Paper, Container, TextField, List, ListItem, ListItemText, Snackbar, Alert, Switch, FormControlLabel, Slider } from '@mui/material';
 import { io } from 'socket.io-client';
 import axios from 'axios';
+import CryptoJS from 'crypto-js';
 
 const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com'; // Update with your backend URL
 
@@ -15,6 +16,15 @@ const HostDashboard = () => {
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoError, setGeoError] = useState('');
+  const peerConnection = useRef(null);
+  const dataChannel = useRef(null);
+  const [transferMsg, setTransferMsg] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [receivedFile, setReceivedFile] = useState(null);
+  const [connRequest, setConnRequest] = useState(null);
+  const [peerSocketId, setPeerSocketId] = useState(null);
+  const [darkMode, setDarkMode] = useState(false);
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'info' });
 
   const PRIVACY_NOTICE = `To help renters find your device, ShareBuddy will use your approximate location (city-level, never your exact address) via a secure IP geolocation service. Your location is only used for matching and never shared with third parties.`;
 
@@ -86,11 +96,104 @@ const HostDashboard = () => {
         setStatus('File save not available.');
       }
     });
+    // --- NEW: Listen for connection requests from renters ---
+    s.on('connection-request', async (data) => {
+      setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
+      setConnRequest(data);
+      setPeerSocketId(data.from);
+      // For MVP, auto-accept:
+      s.emit('connection-response', { target: data.from, accept: true });
+      // --- Setup WebRTC peer connection ---
+      await setupPeerConnection(data.from);
+      setTransferMsg('Setting up connection...');
+    });
   };
+
+  // --- WebRTC: Handle incoming signals from renter ---
+  useEffect(() => {
+    if (!socket) return;
+    const handleSignal = async (payload) => {
+      if (!peerConnection.current) return;
+      if (payload.signal.type === 'offer') {
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
+        const answer = await peerConnection.current.createAnswer();
+        await peerConnection.current.setLocalDescription(answer);
+        socket.emit('signal', { target: payload.from, signal: answer });
+      } else if (payload.signal.candidate) {
+        await peerConnection.current.addIceCandidate(new RTCIceCandidate(payload.signal));
+      }
+    };
+    socket.on('signal', handleSignal);
+    return () => { socket.off('signal', handleSignal); };
+  }, [socket]);
+
+  // --- WebRTC: Setup peer connection and data channel ---
+  const setupPeerConnection = async (targetSocketId) => {
+    peerConnection.current = new window.RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    });
+    peerConnection.current.onicecandidate = (event) => {
+      if (event.candidate) {
+        socket.emit('signal', { target: targetSocketId, signal: event.candidate });
+      }
+    };
+    peerConnection.current.ondatachannel = (event) => {
+      dataChannel.current = event.channel;
+      dataChannel.current.onmessage = receiveFileChunks;
+      dataChannel.current.onclose = () => setTransferMsg('Transfer channel closed.');
+    };
+  };
+
+  // --- Host: Receive File Chunks ---
+  let receivedChunks = [];
+  const receiveFileChunks = async (event) => {
+    if (event.data === '__END__') {
+      setTransferMsg('Decrypting file...');
+      const encrypted = receivedChunks.join('');
+      const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
+      const typedArray = wordArrayToUint8Array(decrypted);
+      const blob = new Blob([typedArray]);
+      setReceivedFile(blob);
+      setTransferMsg('File received and decrypted!');
+      setStatus('File received and decrypted!');
+      // Save file to disk
+      if (window.electronAPI && window.electronAPI.saveFile && connRequest) {
+        await window.electronAPI.saveFile(folder, connRequest.filename, blob);
+        setStoredFiles(prev => [...prev, { name: connRequest.filename, size: connRequest.size }]);
+        setStatus(`File saved: ${connRequest.filename}`);
+      }
+      receivedChunks = [];
+      setProgress(100);
+    } else {
+      receivedChunks.push(event.data);
+      setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (connRequest?.size || 1)) * 100)));
+    }
+  };
+
+  function wordArrayToUint8Array(wordArray) {
+    const words = wordArray.words;
+    const sigBytes = wordArray.sigBytes;
+    const u8 = new Uint8Array(sigBytes);
+    let i = 0, j = 0;
+    while (i < sigBytes) {
+      u8[i++] = (words[j] >> 24) & 0xff;
+      if (i === sigBytes) break;
+      u8[i++] = (words[j] >> 16) & 0xff;
+      if (i === sigBytes) break;
+      u8[i++] = (words[j] >> 8) & 0xff;
+      if (i === sigBytes) break;
+      u8[i++] = words[j++] & 0xff;
+    }
+    return u8;
+  }
+
+  const handleToastClose = () => setToast({ ...toast, open: false });
 
   return (
     <Container maxWidth="sm" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-      <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 4 }}>
+      <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 6, backdropFilter: 'blur(8px)', background: darkMode ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.85)', boxShadow: '0 8px 32px 0 rgba(31,38,135,0.37)' }}>
         <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
           <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy Host</Typography>
           <Typography variant="subtitle1" color="text.secondary" gutterBottom>
@@ -100,12 +203,13 @@ const HostDashboard = () => {
         <Button variant="outlined" onClick={selectFolder} sx={{ mb: 2 }}>
           {folder ? `Folder: ${folder}` : 'Select Storage Folder'}
         </Button>
-        <TextField
-          label="Reserve Space (GB)"
-          type="number"
+        <Slider
           value={reserved}
-          onChange={e => setReserved(e.target.value)}
-          fullWidth
+          onChange={(e, val) => setReserved(val)}
+          min={1}
+          max={100}
+          step={1}
+          valueLabelDisplay="on"
           sx={{ mb: 2 }}
         />
         <Box mb={2}>
@@ -114,6 +218,32 @@ const HostDashboard = () => {
             <input type="checkbox" id="privacy" checked={privacyAccepted} onChange={e => setPrivacyAccepted(e.target.checked)} />
             <label htmlFor="privacy" style={{ marginLeft: 8 }}>I understand and accept</label>
           </Box>
+        </Box>
+        <FormControlLabel
+          control={<Switch checked={darkMode} onChange={() => setDarkMode(!darkMode)} />}
+          label={darkMode ? 'Dark Mode' : 'Light Mode'}
+          sx={{ mb: 2 }}
+        />
+        <Box display="flex" alignItems="center" mb={2}>
+          <Box
+            sx={{
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              background: online ? 'linear-gradient(90deg, #00e676, #1de9b6)' : '#ccc',
+              boxShadow: online ? '0 0 8px #00e676' : 'none',
+              mr: 1,
+              animation: online ? 'pulse 1.5s infinite' : 'none',
+              '@keyframes pulse': {
+                '0%': { boxShadow: '0 0 0 0 #00e676' },
+                '70%': { boxShadow: '0 0 0 8px rgba(0,230,118,0)' },
+                '100%': { boxShadow: '0 0 0 0 #00e676' }
+              }
+            }}
+          />
+          <Typography variant="body2" color={online ? 'success.main' : 'text.secondary'}>
+            {online ? 'Online' : 'Offline'}
+          </Typography>
         </Box>
         <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={goOnline} disabled={online || !privacyAccepted || geoLoading}>
           {geoLoading ? 'Locating...' : (online ? 'Online' : 'Go Online')}
@@ -129,6 +259,11 @@ const HostDashboard = () => {
             ))}
           </List>
         </Box>
+        <Snackbar open={toast.open} autoHideDuration={4000} onClose={handleToastClose}>
+          <Alert onClose={handleToastClose} severity={toast.severity} sx={{ width: '100%' }}>
+            {toast.message}
+          </Alert>
+        </Snackbar>
       </Paper>
     </Container>
   );
