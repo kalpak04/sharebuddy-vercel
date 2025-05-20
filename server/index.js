@@ -82,19 +82,17 @@ io.on('connection', (socket) => {
     // data: { latitude, longitude, radiusKm }
     const { latitude, longitude, radiusKm } = data;
     const { rows } = await pool.query(`
-      SELECT *,
-        (6371 * acos(
-          cos(radians($1)) * cos(radians(latitude)) *
-          cos(radians(longitude) - radians($2)) +
-          sin(radians($1)) * sin(radians(latitude))
-        )) AS distance
-      FROM hosts
-      WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-      HAVING (6371 * acos(
-        cos(radians($1)) * cos(radians(latitude)) *
-        cos(radians(longitude) - radians($2)) +
-        sin(radians($1)) * sin(radians(latitude))
-      )) < $3
+      SELECT * FROM (
+        SELECT *,
+          (6371 * acos(
+            cos(radians($1)) * cos(radians(latitude)) *
+            cos(radians(longitude) - radians($2)) +
+            sin(radians($1)) * sin(radians(latitude))
+          )) AS distance
+        FROM hosts
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+      ) AS sub
+      WHERE distance < $3
       ORDER BY distance ASC
     `, [latitude, longitude, radiusKm]);
     socket.emit('nearby-hosts', rows);
