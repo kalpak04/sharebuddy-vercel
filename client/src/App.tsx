@@ -8,7 +8,7 @@ import { io, Socket } from 'socket.io-client';
 import CryptoJS from 'crypto-js';
 
 // IMPORTANT: Update this URL after backend deployment
-const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com'; // <-- Replace with your Render backend URL after deploy
+const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com';
 const SIGNAL_EVENT = 'signal';
 const REQUEST_EVENT = 'connection-request';
 const RESPONSE_EVENT = 'connection-response';
