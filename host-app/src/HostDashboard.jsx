@@ -119,6 +119,7 @@ const HostDashboard = () => {
     });
     // --- NEW: Listen for connection requests from renters ---
     s.on('connection-request', async (data) => {
+      console.log('Received connection-request event:', data);
       setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
       setConnRequest(data);
       setPeerSocketId(data.from);
@@ -134,6 +135,7 @@ const HostDashboard = () => {
   useEffect(() => {
     if (!socket) return;
     const handleSignal = async (payload) => {
+      console.log('Received signal event:', payload);
       if (!peerConnection.current) return;
       if (payload.signal.type === 'offer') {
         await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
@@ -145,11 +147,30 @@ const HostDashboard = () => {
       }
     };
     socket.on('signal', handleSignal);
-    return () => { socket.off('signal', handleSignal); };
+    socket.on('connection-request', (data) => {
+      console.log('Received connection-request event:', data);
+      setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
+      setConnRequest(data);
+      setPeerSocketId(data.from);
+      // For MVP, auto-accept:
+      socket.emit('connection-response', { target: data.from, accept: true });
+      // --- Setup WebRTC peer connection ---
+      setupPeerConnection(data.from);
+      setTransferMsg('Setting up connection...');
+    });
+    socket.on('connection-response', (data) => {
+      console.log('Received connection-response event:', data);
+    });
+    return () => {
+      socket.off('signal', handleSignal);
+      socket.off('connection-request');
+      socket.off('connection-response');
+    };
   }, [socket]);
 
   // --- WebRTC: Setup peer connection and data channel ---
   const setupPeerConnection = async (targetSocketId) => {
+    console.log('Calling setupPeerConnection:', targetSocketId);
     peerConnection.current = new window.RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },

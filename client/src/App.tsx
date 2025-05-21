@@ -103,6 +103,7 @@ const App: React.FC = () => {
 
   // --- WebRTC Signaling Logic ---
   const handleSignal = async (payload: any) => {
+    console.log('Received signal event:', payload);
     if (!peerConnection.current) return;
     if (payload.signal.type === 'offer') {
       await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
@@ -118,6 +119,7 @@ const App: React.FC = () => {
 
   // --- Host: Handle incoming connection requests ---
   const handleConnectionRequest = (req: ConnectionRequest) => {
+    console.log('Received connection-request event:', req);
     setConnRequest(req);
     setShowDialog(true);
   };
@@ -140,6 +142,7 @@ const App: React.FC = () => {
 
   // --- Renter: Handle host response ---
   const handleConnectionResponse = async (payload: { accept: boolean }) => {
+    console.log('Received connection-response event:', payload);
     if (payload.accept) {
       setStatus('Host accepted. Connecting...');
       setStep('transfer');
@@ -204,6 +207,7 @@ const App: React.FC = () => {
 
   // --- Setup WebRTC Peer Connection ---
   const setupPeerConnection = async (myRole: PeerRole, targetSocketId: string) => {
+    console.log('Calling setupPeerConnection:', myRole, targetSocketId);
     peerConnection.current = new RTCPeerConnection({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
