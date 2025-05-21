@@ -25,5 +25,8 @@
   },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2"
+  },
+  "engines": {
+    "node": "20.x"
   }
 }
