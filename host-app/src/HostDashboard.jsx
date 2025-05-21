@@ -5,9 +5,7 @@ import axios from 'axios';
 import CryptoJS from 'crypto-js';
 
 // Use localhost for development, fallback to production for build
-const SOCKET_URL = process.env.NODE_ENV === 'development'
-  ? 'http://localhost:3000' // or your server port
-  : 'https://sharebuddy-vercel.onrender.com';
+const SOCKET_URL = "https://sharebuddy-vercel.onrender.com";
 
 const HostDashboard = () => {
   const [folder, setFolder] = useState('');
