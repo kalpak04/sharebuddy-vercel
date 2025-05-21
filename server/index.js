@@ -10,9 +10,12 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 const app = express();
 app.use(cors({
- origin: 'https://sharebuddy-vercel.vercel.app',
-    methods: ['GET', 'POST'] 
+  origin: 'https://sharebuddy-vercel.vercel.app',
+  methods: ['GET', 'POST'],
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+app.options('*', cors());
 
 const server = http.createServer(app);
 const io = new Server(server, {
