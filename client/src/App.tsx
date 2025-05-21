@@ -211,19 +211,39 @@ const App: React.FC = () => {
       ]
     });
     peerConnection.current.onicecandidate = (event) => {
+      console.log('ICE candidate:', event.candidate);
       if (event.candidate) {
         socket?.emit(SIGNAL_EVENT, { target: targetSocketId, signal: event.candidate });
       }
     };
+    peerConnection.current.oniceconnectionstatechange = () => {
+      console.log('ICE connection state:', peerConnection.current?.iceConnectionState);
+    };
     if (myRole === 'renter') {
       dataChannel.current = peerConnection.current.createDataChannel('file');
-      dataChannel.current.onopen = sendFileChunks;
-      dataChannel.current.onclose = () => setTransferMsg('Transfer channel closed.');
+      dataChannel.current.onopen = () => {
+        console.log('Data channel opened (renter)');
+        sendFileChunks();
+      };
+      dataChannel.current.onclose = () => {
+        console.log('Data channel closed (renter)');
+        setTransferMsg('Transfer channel closed.');
+      };
+      dataChannel.current.onmessage = (event) => {
+        console.log('Renter received message:', event.data);
+      };
     } else {
       peerConnection.current.ondatachannel = (event) => {
+        console.log('Host received data channel');
         dataChannel.current = event.channel;
+        dataChannel.current.onopen = () => {
+          console.log('Data channel opened (host)');
+        };
+        dataChannel.current.onclose = () => {
+          console.log('Data channel closed (host)');
+          setTransferMsg('Transfer channel closed.');
+        };
         dataChannel.current.onmessage = receiveFileChunks;
-        dataChannel.current.onclose = () => setTransferMsg('Transfer channel closed.');
       };
     }
     if (myRole === 'renter') {
@@ -236,6 +256,7 @@ const App: React.FC = () => {
   // --- Renter: Send File Chunks ---
   const sendFileChunks = async () => {
     if (!file || !dataChannel.current) return;
+    console.log('Data channel open, starting file transfer...');
     setTransferMsg('Encrypting file...');
     const arrayBuffer = await file.arrayBuffer();
     const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
@@ -245,11 +266,13 @@ const App: React.FC = () => {
     while (offset < encrypted.length) {
       const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
       dataChannel.current.send(chunk);
+      console.log('Sent chunk:', chunk.length, 'bytes');
       offset += CHUNK_SIZE;
       setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
       await new Promise((res) => setTimeout(res, 10));
     }
     dataChannel.current.send('__END__');
+    console.log('Sent __END__');
     setTransferMsg('File sent!');
     setStep('done');
   };
@@ -257,6 +280,7 @@ const App: React.FC = () => {
   // --- Host: Receive File Chunks ---
   let receivedChunks: string[] = [];
   const receiveFileChunks = (event: MessageEvent) => {
+    console.log('Host received chunk:', event.data);
     if (event.data === '__END__') {
       setTransferMsg('Decrypting file...');
       const encrypted = receivedChunks.join('');

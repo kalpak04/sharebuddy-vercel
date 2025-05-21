@@ -4,7 +4,10 @@ import { io } from 'socket.io-client';
 import axios from 'axios';
 import CryptoJS from 'crypto-js';
 
-const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com'; // Update with your backend URL
+// Use localhost for development, fallback to production for build
+const SOCKET_URL = process.env.NODE_ENV === 'development'
+  ? 'http://localhost:3000' // or your server port
+  : 'https://sharebuddy-vercel.onrender.com';
 
 const HostDashboard = () => {
   const [folder, setFolder] = useState('');
@@ -154,20 +157,32 @@ const HostDashboard = () => {
       ]
     });
     peerConnection.current.onicecandidate = (event) => {
+      console.log('ICE candidate:', event.candidate);
       if (event.candidate) {
         socket.emit('signal', { target: targetSocketId, signal: event.candidate });
       }
     };
+    peerConnection.current.oniceconnectionstatechange = () => {
+      console.log('ICE connection state:', peerConnection.current.iceConnectionState);
+    };
     peerConnection.current.ondatachannel = (event) => {
+      console.log('Host received data channel');
       dataChannel.current = event.channel;
+      dataChannel.current.onopen = () => {
+        console.log('Data channel opened (host)');
+      };
+      dataChannel.current.onclose = () => {
+        console.log('Data channel closed (host)');
+        setTransferMsg('Transfer channel closed.');
+      };
       dataChannel.current.onmessage = receiveFileChunks;
-      dataChannel.current.onclose = () => setTransferMsg('Transfer channel closed.');
     };
   };
 
   // --- Host: Receive File Chunks ---
   let receivedChunks = [];
   const receiveFileChunks = async (event) => {
+    console.log('Host received chunk:', event.data);
     if (event.data === '__END__') {
       setTransferMsg('Decrypting file...');
       const encrypted = receivedChunks.join('');
