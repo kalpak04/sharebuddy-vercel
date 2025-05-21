@@ -81,6 +81,9 @@ const HostDashboard = () => {
       setAuthPassword('');
     } catch (err) {
       setAuthError(err.response?.data?.error || 'Auth failed');
+      setStatus('Error: ' + (err.response?.data?.error || err.message));
+      setToast({ open: true, message: 'Auth error: ' + (err.response?.data?.error || err.message), severity: 'error' });
+      console.error('Auth error:', err);
     }
   };
 
@@ -95,40 +98,58 @@ const HostDashboard = () => {
       return;
     }
     setStatus('Fetching location...');
-    const { latitude, longitude } = await getGeolocation();
-    if (geoError) {
-      setStatus(geoError);
-      return;
-    }
-    const s = io(SOCKET_URL, { auth: { token: auth?.token }, transports: ['websocket'] });
-    setSocket(s);
-    setOnline(true);
-    setStatus('Online and waiting for renters...');
-    // Log registration attempt
-    console.info('Registering host:', { reserved, latitude, longitude });
-    s.emit('register-host', { storage: reserved, latitude, longitude });
-    s.on('file-transfer', async (data) => {
-      setStatus(`Receiving file: ${data.filename}`);
-      if (window.electronAPI && window.electronAPI.saveFile) {
-        await window.electronAPI.saveFile(folder, data.filename, data.fileBuffer);
-        setStoredFiles(prev => [...prev, { name: data.filename, size: data.size }]);
-        setStatus(`File saved: ${data.filename}`);
-      } else {
-        setStatus('File save not available.');
+    try {
+      const { latitude, longitude } = await getGeolocation();
+      if (geoError) {
+        setStatus(geoError);
+        return;
       }
-    });
-    // --- NEW: Listen for connection requests from renters ---
-    s.on('connection-request', async (data) => {
-      console.log('Received connection-request event:', data);
-      setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
-      setConnRequest(data);
-      setPeerSocketId(data.from);
-      // For MVP, auto-accept:
-      s.emit('connection-response', { target: data.from, accept: true });
-      // --- Setup WebRTC peer connection ---
-      await setupPeerConnection(data.from);
-      setTransferMsg('Setting up connection...');
-    });
+      const s = io(SOCKET_URL, { auth: { token: auth?.token }, transports: ['websocket'] });
+      setSocket(s);
+      setOnline(true);
+      setStatus('Online and waiting for renters...');
+      // Log registration attempt
+      console.info('Registering host:', { reserved, latitude, longitude });
+      s.emit('register-host', { storage: reserved, latitude, longitude });
+      s.on('file-transfer', async (data) => {
+        setStatus(`Receiving file: ${data.filename}`);
+        try {
+          if (window.electronAPI && window.electronAPI.saveFile) {
+            await window.electronAPI.saveFile(folder, data.filename, data.fileBuffer);
+            setStoredFiles(prev => [...prev, { name: data.filename, size: data.size }]);
+            setStatus(`File saved: ${data.filename}`);
+          } else {
+            setStatus('File save not available.');
+          }
+        } catch (err) {
+          setStatus('Error saving file.');
+          setToast({ open: true, message: 'Error saving file: ' + err.message, severity: 'error' });
+          console.error('File save error:', err);
+        }
+      });
+      // --- NEW: Listen for connection requests from renters ---
+      s.on('connection-request', async (data) => {
+        console.log('Received connection-request event:', data);
+        setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
+        setConnRequest(data);
+        setPeerSocketId(data.from);
+        // For MVP, auto-accept:
+        s.emit('connection-response', { target: data.from, accept: true });
+        // --- Setup WebRTC peer connection ---
+        try {
+          await setupPeerConnection(data.from);
+          setTransferMsg('Setting up connection...');
+        } catch (err) {
+          setTransferMsg('Connection error: ' + err.message);
+          setToast({ open: true, message: 'Connection error: ' + err.message, severity: 'error' });
+          console.error('WebRTC setup error:', err);
+        }
+      });
+    } catch (err) {
+      setStatus('Go online error: ' + err.message);
+      setToast({ open: true, message: 'Go online error: ' + err.message, severity: 'error' });
+      console.error('Go online error:', err);
+    }
   };
 
   // --- WebRTC: Handle incoming signals from renter ---
@@ -203,52 +224,60 @@ const HostDashboard = () => {
   // --- Host: Receive File Chunks ---
   let receivedChunks = [];
   const receiveFileChunks = async (event) => {
-    console.log('Host received chunk:', event.data);
-    if (event.data === '__END__') {
-      setTransferMsg('Decrypting file...');
-      const encrypted = receivedChunks.join('');
-      const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
-      const typedArray = wordArrayToUint8Array(decrypted);
-      const blob = new Blob([typedArray]);
-      setReceivedFile(blob);
-      setTransferMsg('File received and decrypted!');
-      setStatus('File received and decrypted!');
-      // File type/size validation
-      if (connRequest) {
-        const maxSize = parseInt(reserved, 10) * 1024 * 1024;
-        if (connRequest.size > maxSize) {
-          setStatus('File exceeds reserved storage quota.');
-          setToast({ open: true, message: 'File exceeds reserved storage quota.', severity: 'error' });
-          receivedChunks = [];
-          setProgress(0);
-          return;
+    try {
+      console.log('Host received chunk:', event.data);
+      if (event.data === '__END__') {
+        setTransferMsg('Decrypting file...');
+        const encrypted = receivedChunks.join('');
+        const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
+        const typedArray = wordArrayToUint8Array(decrypted);
+        const blob = new Blob([typedArray]);
+        setReceivedFile(blob);
+        setTransferMsg('File received and decrypted!');
+        setStatus('File received and decrypted!');
+        // File type/size validation
+        if (connRequest) {
+          const maxSize = parseInt(reserved, 10) * 1024 * 1024;
+          if (connRequest.size > maxSize) {
+            setStatus('File exceeds reserved storage quota.');
+            setToast({ open: true, message: 'File exceeds reserved storage quota.', severity: 'error' });
+            receivedChunks = [];
+            setProgress(0);
+            return;
+          }
+          const allowedTypes = ['pdf', 'txt', 'jpg', 'png', 'jpeg', 'docx'];
+          const ext = connRequest.filename.split('.').pop().toLowerCase();
+          if (!allowedTypes.includes(ext)) {
+            setStatus('File type not allowed.');
+            setToast({ open: true, message: 'File type not allowed.', severity: 'error' });
+            receivedChunks = [];
+            setProgress(0);
+            return;
+          }
         }
-        const allowedTypes = ['pdf', 'txt', 'jpg', 'png', 'jpeg', 'docx'];
-        const ext = connRequest.filename.split('.').pop().toLowerCase();
-        if (!allowedTypes.includes(ext)) {
-          setStatus('File type not allowed.');
-          setToast({ open: true, message: 'File type not allowed.', severity: 'error' });
-          receivedChunks = [];
-          setProgress(0);
-          return;
+        // Save file to disk
+        try {
+          if (window.electronAPI && window.electronAPI.saveFile && connRequest) {
+            await window.electronAPI.saveFile(folder, connRequest.filename, blob);
+            setStoredFiles(prev => [...prev, { name: connRequest.filename, size: connRequest.size }]);
+            setStatus(`File saved: ${connRequest.filename}`);
+          }
+        } catch (err) {
+          setStatus('Error saving file.');
+          setToast({ open: true, message: 'Error saving file: ' + err.message, severity: 'error' });
+          console.error('File save error:', err);
         }
+        receivedChunks = [];
+        setProgress(100);
+      } else {
+        receivedChunks.push(event.data);
+        setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (connRequest?.size || 1)) * 100)));
       }
-      // Save file to disk
-      try {
-        if (window.electronAPI && window.electronAPI.saveFile && connRequest) {
-          await window.electronAPI.saveFile(folder, connRequest.filename, blob);
-          setStoredFiles(prev => [...prev, { name: connRequest.filename, size: connRequest.size }]);
-          setStatus(`File saved: ${connRequest.filename}`);
-        }
-      } catch (err) {
-        setStatus('Error saving file.');
-        setToast({ open: true, message: 'Error saving file.', severity: 'error' });
-      }
-      receivedChunks = [];
-      setProgress(100);
-    } else {
-      receivedChunks.push(event.data);
-      setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (connRequest?.size || 1)) * 100)));
+    } catch (err) {
+      setTransferMsg('File receive error: ' + err.message);
+      setStatus('File receive error: ' + err.message);
+      setToast({ open: true, message: 'File receive error: ' + err.message, severity: 'error' });
+      console.error('File receive error:', err);
     }
   };
 

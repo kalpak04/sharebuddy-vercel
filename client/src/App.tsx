@@ -84,6 +84,8 @@ const App: React.FC = () => {
       setAuthPassword('');
     } catch (err: any) {
       setAuthError(err.message);
+      setStatus('Error: ' + err.message);
+      console.error('Auth error:', err);
     }
   };
 
@@ -260,45 +262,57 @@ const App: React.FC = () => {
   // --- Renter: Send File Chunks ---
   const sendFileChunks = async () => {
     if (!file || !dataChannel.current) return;
-    console.log('Data channel open, starting file transfer...');
-    setTransferMsg('Encrypting file...');
-    const arrayBuffer = await file.arrayBuffer();
-    const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
-    const encrypted = CryptoJS.AES.encrypt(wordArray, 'sharebuddy-key').toString();
-    setTransferMsg('Sending file...');
-    let offset = 0;
-    while (offset < encrypted.length) {
-      const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
-      dataChannel.current.send(chunk);
-      console.log('Sent chunk:', chunk.length, 'bytes');
-      offset += CHUNK_SIZE;
-      setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
-      await new Promise((res) => setTimeout(res, 10));
+    try {
+      console.log('Data channel open, starting file transfer...');
+      setTransferMsg('Encrypting file...');
+      const arrayBuffer = await file.arrayBuffer();
+      const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
+      const encrypted = CryptoJS.AES.encrypt(wordArray, 'sharebuddy-key').toString();
+      setTransferMsg('Sending file...');
+      let offset = 0;
+      while (offset < encrypted.length) {
+        const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
+        dataChannel.current.send(chunk);
+        console.log('Sent chunk:', chunk.length, 'bytes');
+        offset += CHUNK_SIZE;
+        setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
+        await new Promise((res) => setTimeout(res, 10));
+      }
+      dataChannel.current.send('__END__');
+      console.log('Sent __END__');
+      setTransferMsg('File sent!');
+      setStep('done');
+    } catch (err: any) {
+      setTransferMsg('File transfer error: ' + err.message);
+      setStatus('File transfer error: ' + err.message);
+      console.error('File transfer error:', err);
     }
-    dataChannel.current.send('__END__');
-    console.log('Sent __END__');
-    setTransferMsg('File sent!');
-    setStep('done');
   };
 
   // --- Host: Receive File Chunks ---
   let receivedChunks: string[] = [];
   const receiveFileChunks = (event: MessageEvent) => {
-    console.log('Host received chunk:', event.data);
-    if (event.data === '__END__') {
-      setTransferMsg('Decrypting file...');
-      const encrypted = receivedChunks.join('');
-      const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
-      const typedArray = wordArrayToUint8Array(decrypted);
-      const blob = new Blob([typedArray]);
-      setReceivedFile(blob);
-      setTransferMsg('File received and decrypted!');
-      setStep('done');
-      receivedChunks = [];
-      setProgress(100);
-    } else {
-      receivedChunks.push(event.data);
-      setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (file?.size || 1)) * 100)));
+    try {
+      console.log('Host received chunk:', event.data);
+      if (event.data === '__END__') {
+        setTransferMsg('Decrypting file...');
+        const encrypted = receivedChunks.join('');
+        const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
+        const typedArray = wordArrayToUint8Array(decrypted);
+        const blob = new Blob([typedArray]);
+        setReceivedFile(blob);
+        setTransferMsg('File received and decrypted!');
+        setStep('done');
+        receivedChunks = [];
+        setProgress(100);
+      } else {
+        receivedChunks.push(event.data);
+        setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (file?.size || 1)) * 100)));
+      }
+    } catch (err: any) {
+      setTransferMsg('File receive error: ' + err.message);
+      setStatus('File receive error: ' + err.message);
+      console.error('File receive error:', err);
     }
   };
 

@@ -7,8 +7,13 @@ const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET;
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
 
 const app = express();
+app.use(helmet());
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
 app.use(cors({
   origin: 'https://sharebuddy-vercel.vercel.app',
   methods: ['GET', 'POST'],
@@ -28,7 +33,7 @@ const io = new Server(server, {
 // PostgreSQL pool
 const pool = new Pool();
 
-// Ensure users table exists
+// Ensure all tables exist (users, hosts, renters)
 (async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -36,43 +41,84 @@ const pool = new Pool();
       email VARCHAR(255) UNIQUE NOT NULL,
       password_hash VARCHAR(255) NOT NULL,
       created_at TIMESTAMP DEFAULT NOW()
-    )
+    );
+    CREATE TABLE IF NOT EXISTS hosts (
+      socket_id VARCHAR(255) PRIMARY KEY,
+      user_id INTEGER,
+      storage INTEGER,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS renters (
+      socket_id VARCHAR(255) PRIMARY KEY,
+      user_id INTEGER,
+      filename VARCHAR(255),
+      size INTEGER,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 })();
 
 // Register endpoint
-app.post('/register', express.json(), async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
-    const hash = await bcrypt.hash(password, 12);
-    const { rows } = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', [email, hash]);
-    const user = rows[0];
-    const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, email: user.email });
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Email already registered.' });
-    console.error('Register error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+app.post('/register',
+  express.json(),
+  [
+    body('email').isEmail().withMessage('Invalid email'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+  ],
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: errors.array().map(e => e.msg).join(', ') });
+    }
+    next();
+  },
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const hash = await bcrypt.hash(password, 12);
+      const { rows } = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', [email, hash]);
+      const user = rows[0];
+      const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+      res.json({ token, email: user.email });
+    } catch (err) {
+      if (err.code === '23505') return res.status(409).json({ error: 'Email already registered.' });
+      console.error('Register error:', err);
+      res.status(500).json({ error: 'Internal server error.' });
+    }
   }
-});
+);
 
 // Login endpoint
-app.post('/login', express.json(), async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required.' });
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (!rows[0]) return res.status(401).json({ error: 'Invalid credentials.' });
-    const valid = await bcrypt.compare(password, rows[0].password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials.' });
-    const token = jwt.sign({ userId: rows[0].id, email: rows[0].email }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, email: rows[0].email });
-  } catch (err) {
-    console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+app.post('/login',
+  express.json(),
+  [
+    body('email').isEmail().withMessage('Invalid email'),
+    body('password').notEmpty().withMessage('Password required')
+  ],
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: errors.array().map(e => e.msg).join(', ') });
+    }
+    next();
+  },
+  async (req, res) => {
+    try {
+      const { email, password } = req.body;
+      const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      if (!rows[0]) return res.status(401).json({ error: 'Invalid credentials.' });
+      const valid = await bcrypt.compare(password, rows[0].password_hash);
+      if (!valid) return res.status(401).json({ error: 'Invalid credentials.' });
+      const token = jwt.sign({ userId: rows[0].id, email: rows[0].email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+      res.json({ token, email: rows[0].email });
+    } catch (err) {
+      console.error('Login error:', err);
+      res.status(500).json({ error: 'Internal server error.' });
+    }
   }
-});
+);
 
 // Auth middleware
 function authMiddleware(req, res, next) {
