@@ -3,7 +3,6 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
-const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -14,22 +13,7 @@ const multer = require('multer');
 const fs = require('fs');
 const upload = multer({ dest: 'uploads/' }); // Directory to store files
 const ftpServer = require('./ftp-server');
-
-// Constants
-const MAX_POOL_SIZE = process.env.MAX_POOL_SIZE || 20;
-const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS || 30000;
-const CONNECTION_TIMEOUT_MS = process.env.CONNECTION_TIMEOUT_MS || 5000;
-
-// Database Configuration
-const dbConfig = {
-  // Support both individual vars and connection string
-  connectionString: process.env.DATABASE_URL || `postgres://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: MAX_POOL_SIZE,
-  idleTimeoutMillis: IDLE_TIMEOUT_MS,
-  connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
-  application_name: 'sharebuddy_backend'
-};
+const { pool, checkDatabaseHealth } = require('./db');
 
 const app = express();
 app.use(helmet());
@@ -53,19 +37,6 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
-});
-
-// Initialize PostgreSQL pool with advanced configuration
-const pool = new Pool(dbConfig);
-
-// Global error handler for unexpected pool errors
-pool.on('error', (err) => {
-  console.error('Unexpected database error:', err);
-  // Don't exit process - instead notify monitoring and handle gracefully
-  if (process.env.NODE_ENV === 'production') {
-    // TODO: Add your monitoring service notification here
-    console.error('Critical database error - notifying monitoring service');
   }
 });
 
