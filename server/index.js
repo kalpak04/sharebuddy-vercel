@@ -35,10 +35,15 @@ app.use(helmet());
 app.use(express.json());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
 app.use(cors({
-  origin: 'https://sharebuddy-vercel.vercel.app',
-  methods: ['GET', 'POST'],
+  origin: [
+    'https://sharebuddy-vercel.vercel.app',
+    'https://sharebuddy-vercel.vercel.app/',
+    'https://sharebuddy.vercel.app',
+    'http://localhost:3000'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 app.options('*', cors());
 
@@ -107,10 +112,12 @@ async function gracefulShutdown(signal) {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
+        username VARCHAR(50) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       );
+      
       CREATE TABLE IF NOT EXISTS hosts (
         socket_id VARCHAR(255) PRIMARY KEY,
         user_id INTEGER REFERENCES users(id),
@@ -119,6 +126,7 @@ async function gracefulShutdown(signal) {
         longitude DOUBLE PRECISION,
         created_at TIMESTAMP DEFAULT NOW()
       );
+      
       CREATE TABLE IF NOT EXISTS renters (
         socket_id VARCHAR(255) PRIMARY KEY,
         user_id INTEGER REFERENCES users(id),
@@ -126,6 +134,7 @@ async function gracefulShutdown(signal) {
         size INTEGER,
         created_at TIMESTAMP DEFAULT NOW()
       );
+      
       CREATE TABLE IF NOT EXISTS files (
         id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id),
@@ -139,7 +148,10 @@ async function gracefulShutdown(signal) {
     console.log('Database tables created successfully');
   } catch (err) {
     console.error('Error creating database tables:', err);
-    process.exit(1);
+    // Don't exit process in production, just log the error
+    if (process.env.NODE_ENV !== 'production') {
+      process.exit(1);
+    }
   }
 })();
 
@@ -147,22 +159,41 @@ async function gracefulShutdown(signal) {
 app.post('/register',
   [
     body('email').isEmail().withMessage('Invalid email'),
-    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+    body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters')
   ],
   async (req, res) => {
     try {
+      console.log('Registration request received:', {
+        email: req.body.email,
+        username: req.body.username,
+        headers: req.headers
+      });
+
       // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array().map(e => e.msg).join(', ') });
+        console.log('Validation errors:', errors.array());
+        return res.status(400).json({ 
+          error: 'Validation failed',
+          details: errors.array().map(e => e.msg)
+        });
       }
 
-      const { email, password } = req.body;
+      const { email, password, username } = req.body;
       
-      // Check if user already exists
-      const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+      // Check if user already exists (either email or username)
+      const existingUser = await pool.query(
+        'SELECT id, email, username FROM users WHERE email = $1 OR username = $2',
+        [email, username]
+      );
+      
       if (existingUser.rows.length > 0) {
-        return res.status(409).json({ error: 'Email already registered.' });
+        const existing = existingUser.rows[0];
+        return res.status(409).json({ 
+          error: 'User already exists',
+          details: existing.email === email ? 'Email already registered' : 'Username already taken'
+        });
       }
       
       // Hash password
@@ -170,8 +201,8 @@ app.post('/register',
       
       // Create user
       const { rows } = await pool.query(
-        'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING id, email',
-        [email, hash]
+        'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email',
+        [username, email, hash]
       );
       
       const user = rows[0];
@@ -179,7 +210,8 @@ app.post('/register',
       // Generate JWT
       const token = jwt.sign(
         { 
-          userId: user.id, 
+          userId: user.id,
+          username: user.username,
           email: user.email 
         },
         JWT_SECRET,
@@ -189,18 +221,26 @@ app.post('/register',
         }
       );
       
+      console.log('Registration successful for:', user.email);
+      
       // Send success response
       res.status(201).json({ 
         message: 'Registration successful',
         token, 
         user: {
           id: user.id,
+          username: user.username,
           email: user.email
         }
       });
       
     } catch (err) {
-      console.error('Registration error:', err);
+      console.error('Registration error:', {
+        error: err.message,
+        stack: err.stack,
+        body: req.body
+      });
+      
       res.status(500).json({ 
         error: 'Registration failed',
         message: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
@@ -227,7 +267,7 @@ app.post('/login',
       
       // Get user
       const { rows } = await pool.query(
-        'SELECT id, email, password FROM users WHERE email = $1',
+        'SELECT id, username, email, password FROM users WHERE email = $1',
         [email]
       );
       
@@ -244,7 +284,8 @@ app.post('/login',
       // Generate JWT
       const token = jwt.sign(
         { 
-          userId: rows[0].id, 
+          userId: rows[0].id,
+          username: rows[0].username,
           email: rows[0].email 
         },
         JWT_SECRET,
@@ -260,6 +301,7 @@ app.post('/login',
         token,
         user: {
           id: rows[0].id,
+          username: rows[0].username,
           email: rows[0].email
         }
       });
@@ -485,6 +527,15 @@ app.get('/health', async (req, res) => {
 // Attach shutdown handlers
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err);
+  res.status(err.status || 500).json({
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error',
+    details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+});
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {

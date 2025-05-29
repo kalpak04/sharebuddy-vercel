@@ -61,6 +61,7 @@ const App: React.FC = () => {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authUsername, setAuthUsername] = useState('');
   const [authError, setAuthError] = useState('');
 
   const theme = createTheme({
@@ -89,16 +90,21 @@ const App: React.FC = () => {
   const handleAuth = async () => {
     setAuthError('');
     try {
+      const body = authMode === 'login' 
+        ? { email: authEmail, password: authPassword }
+        : { email: authEmail, password: authPassword, username: authUsername };
+        
       const res = await fetch(`${SOCKET_URL}/${authMode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: authEmail, password: authPassword })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Auth failed');
+      if (!res.ok) throw new Error(data.error || data.message || 'Auth failed');
       setAuth({ token: data.token, email: data.email });
       setAuthEmail('');
       setAuthPassword('');
+      setAuthUsername('');
     } catch (err: any) {
       setAuthError(err.message);
       setStatus('Error: ' + err.message);
@@ -432,15 +438,60 @@ const App: React.FC = () => {
             <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
               <Avatar src={logo} sx={{ width: 64, height: 64, mb: 1 }} />
               <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy</Typography>
-              <Typography variant="subtitle1" color="text.secondary" gutterBottom>Login or Register to continue</Typography>
+              <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+                {authMode === 'login' ? 'Login to continue' : 'Create your account'}
+              </Typography>
             </Box>
-            <TextField label="Email" type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} fullWidth sx={{ mb: 2 }} autoFocus />
-            <TextField label="Password" type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} fullWidth sx={{ mb: 2 }} />
-            {authError && <Typography color="error" sx={{ mb: 2 }}>{authError}</Typography>}
-            <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={handleAuth}>
+            {authMode === 'register' && (
+              <TextField 
+                label="Username" 
+                value={authUsername} 
+                onChange={e => setAuthUsername(e.target.value)} 
+                fullWidth 
+                sx={{ mb: 2 }} 
+                autoFocus
+              />
+            )}
+            <TextField 
+              label="Email" 
+              type="email" 
+              value={authEmail} 
+              onChange={e => setAuthEmail(e.target.value)} 
+              fullWidth 
+              sx={{ mb: 2 }} 
+              autoFocus={authMode === 'login'}
+            />
+            <TextField 
+              label="Password" 
+              type="password" 
+              value={authPassword} 
+              onChange={e => setAuthPassword(e.target.value)} 
+              fullWidth 
+              sx={{ mb: 2 }} 
+            />
+            {authError && (
+              <Typography color="error" sx={{ mb: 2 }}>
+                {authError}
+              </Typography>
+            )}
+            <Button 
+              variant="contained" 
+              color="primary" 
+              fullWidth 
+              sx={{ mb: 2 }} 
+              onClick={handleAuth}
+              disabled={!authEmail || !authPassword || (authMode === 'register' && !authUsername)}
+            >
               {authMode === 'login' ? 'Login' : 'Register'}
             </Button>
-            <Button fullWidth onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} color="secondary">
+            <Button 
+              fullWidth 
+              onClick={() => {
+                setAuthMode(authMode === 'login' ? 'register' : 'login');
+                setAuthError('');
+              }} 
+              color="secondary"
+            >
               {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
             </Button>
           </Paper>
