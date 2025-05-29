@@ -115,15 +115,54 @@ const App: React.FC = () => {
   // Connect to backend on mount
   useEffect(() => {
     if (!auth) return;
-    const s = io(SOCKET_URL, { auth: { token: auth.token } });
-    setSocket(s);
-    s.on('hosts-update', setHosts);
-    s.on('renters-update', setRenters);
-    s.on(SIGNAL_EVENT, handleSignal);
-    s.on(REQUEST_EVENT, handleConnectionRequest);
-    s.on(RESPONSE_EVENT, handleConnectionResponse);
-    return () => { s.disconnect(); };
-    // eslint-disable-next-line
+    const s = io(SOCKET_URL, { 
+      auth: { token: auth.token },
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 20000,
+      forceNew: true,
+      withCredentials: true
+    });
+
+    s.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setStatus('Connection error: ' + error.message);
+      // Try to reconnect with polling if websocket fails
+      if (error.message.includes('websocket')) {
+        s.io.opts.transports = ['polling', 'websocket'];
+      }
+    });
+
+    s.on('connect_timeout', (timeout) => {
+      console.error('Socket connection timeout:', timeout);
+      setStatus('Connection timeout - retrying...');
+    });
+
+    s.on('reconnect', (attemptNumber) => {
+      console.log('Socket reconnected after', attemptNumber, 'attempts');
+      setStatus('Reconnected to server');
+    });
+
+    s.on('reconnect_error', (error) => {
+      console.error('Socket reconnection error:', error);
+      setStatus('Reconnection error: ' + error.message);
+    });
+
+    s.on('connect', () => {
+      console.log('Socket connected successfully');
+      setSocket(s);
+      s.on('hosts-update', setHosts);
+      s.on('renters-update', setRenters);
+      s.on(SIGNAL_EVENT, handleSignal);
+      s.on(REQUEST_EVENT, handleConnectionRequest);
+      s.on(RESPONSE_EVENT, handleConnectionResponse);
+    });
+
+    return () => { 
+      s.disconnect();
+      s.removeAllListeners();
+    };
   }, [auth]);
 
   // --- WebRTC Signaling Logic ---

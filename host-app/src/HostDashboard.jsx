@@ -136,16 +136,41 @@ const HostDashboard = () => {
         transports: ['websocket', 'polling'],
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
-        timeout: 20000
+        timeout: 20000,
+        forceNew: true,
+        withCredentials: true
       });
       
       s.on('connect_error', (error) => {
         console.error('Socket connection error:', error);
         setStatus('Connection error: ' + error.message);
         setToast({ open: true, message: 'Connection error: ' + error.message, severity: 'error' });
+        // Try to reconnect with polling if websocket fails
+        if (error.message.includes('websocket')) {
+          s.io.opts.transports = ['polling', 'websocket'];
+        }
+      });
+
+      s.on('connect_timeout', (timeout) => {
+        console.error('Socket connection timeout:', timeout);
+        setStatus('Connection timeout - retrying...');
+        setToast({ open: true, message: 'Connection timeout - retrying...', severity: 'warning' });
+      });
+
+      s.on('reconnect', (attemptNumber) => {
+        console.log('Socket reconnected after', attemptNumber, 'attempts');
+        setStatus('Reconnected to server');
+        setToast({ open: true, message: 'Reconnected to server', severity: 'success' });
+      });
+
+      s.on('reconnect_error', (error) => {
+        console.error('Socket reconnection error:', error);
+        setStatus('Reconnection error: ' + error.message);
+        setToast({ open: true, message: 'Reconnection error: ' + error.message, severity: 'error' });
       });
 
       s.on('connect', () => {
+        console.log('Socket connected successfully');
         setSocket(s);
         setOnline(true);
         setStatus('Online and waiting for renters...');
@@ -170,7 +195,8 @@ const HostDashboard = () => {
           console.error('File save error:', err);
         }
       });
-      // --- NEW: Listen for connection requests from renters ---
+
+      // Listen for connection requests from renters
       s.on('connection-request', async (data) => {
         console.log('Received connection-request event:', data);
         setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
@@ -178,15 +204,6 @@ const HostDashboard = () => {
         setPeerSocketId(data.from);
         // For MVP, auto-accept:
         s.emit('connection-response', { target: data.from, accept: true });
-        // --- Setup WebRTC peer connection ---
-        try {
-          await setupPeerConnection(data.from);
-          setTransferMsg('Setting up connection...');
-        } catch (err) {
-          setTransferMsg('Connection error: ' + err.message);
-          setToast({ open: true, message: 'Connection error: ' + err.message, severity: 'error' });
-          console.error('WebRTC setup error:', err);
-        }
       });
     } catch (err) {
       setStatus('Go online error: ' + err.message);
@@ -200,7 +217,10 @@ const HostDashboard = () => {
     if (!socket) return;
     const handleSignal = async (payload) => {
       console.log('Received signal event:', payload);
-      if (!peerConnection.current) return;
+      if (!peerConnection.current) {
+        // Initialize peer connection if not already done
+        await setupPeerConnection(payload.from);
+      }
       if (payload.signal.type === 'offer') {
         await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
         const answer = await peerConnection.current.createAnswer();
@@ -211,24 +231,8 @@ const HostDashboard = () => {
       }
     };
     socket.on('signal', handleSignal);
-    socket.on('connection-request', (data) => {
-      console.log('Received connection-request event:', data);
-      setStatus(`Connection request from renter for file: ${data.filename} (${data.size} bytes)`);
-      setConnRequest(data);
-      setPeerSocketId(data.from);
-      // For MVP, auto-accept:
-      socket.emit('connection-response', { target: data.from, accept: true });
-      // --- Setup WebRTC peer connection ---
-      setupPeerConnection(data.from);
-      setTransferMsg('Setting up connection...');
-    });
-    socket.on('connection-response', (data) => {
-      console.log('Received connection-response event:', data);
-    });
     return () => {
       socket.off('signal', handleSignal);
-      socket.off('connection-request');
-      socket.off('connection-response');
     };
   }, [socket]);
 
