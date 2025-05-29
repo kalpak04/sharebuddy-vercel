@@ -6,7 +6,6 @@ import BackupIcon from '@mui/icons-material/Backup';
 import logo from './logo.svg';
 import { io, Socket } from 'socket.io-client';
 import CryptoJS from 'crypto-js';
-import * as ftp from 'basic-ftp';
 
 // IMPORTANT: Update this URL after backend deployment
 const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com';
@@ -402,7 +401,7 @@ const App: React.FC = () => {
     setSelectedHost(null);
   };
 
-  // Update uploadFileToHost function
+  // Update uploadFileToHost function to use fetch
   const uploadFileToHost = async () => {
     if (!file || !selectedHost || !auth) {
       setStatus('Missing file, host, or authentication.');
@@ -412,51 +411,61 @@ const App: React.FC = () => {
     setStatus('Preparing file for upload...');
     
     try {
-      // Create FTP client
-      const client = new ftp.Client();
-      client.ftp.verbose = true; // Enable for debugging
-      
-      // Connect to FTP server (use auth token as username and host socket ID as password)
-      await client.access({
-        host: new URL(SOCKET_URL).hostname,
-        user: auth.token,
-        password: selectedHost.socket_id,
-        secure: false, // We handle encryption ourselves
-      });
-      
-      // Encrypt file before upload
-      setStatus('Encrypting file...');
+      // Create array buffer from file
       const arrayBuffer = await file.arrayBuffer();
       const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
+      
+      // Encrypt file
+      setStatus('Encrypting file...');
       const encrypted = CryptoJS.AES.encrypt(wordArray, ENCRYPTION_KEY);
       const encryptedBlob = new Blob([encrypted.toString()]);
       
-      // Upload encrypted file
-      setStatus('Uploading encrypted file...');
-      const reader = encryptedBlob.stream().getReader();
-      const uploadStream = new ReadableStream({
-        async start(controller) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-          controller.close();
-        }
-      });
+      // Create form data
+      const formData = new FormData();
+      formData.append('file', encryptedBlob, file.name + '.encrypted');
+      formData.append('hostSocketId', selectedHost.socket_id);
+      formData.append('originalName', file.name);
+      formData.append('size', file.size.toString());
       
       // Upload with progress tracking
-      let uploaded = 0;
-      await client.uploadFrom(uploadStream, file.name, {
-        createDir: true,
-        overwrite: true,
-        onProgress: (info) => {
-          uploaded = info.bytesOverall;
-          const progress = Math.min(100, Math.round((uploaded / encryptedBlob.size) * 100));
+      setStatus('Uploading encrypted file...');
+      
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${SOCKET_URL}/upload`, true);
+      xhr.setRequestHeader('Authorization', `Bearer ${auth.token}`);
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
           setProgress(progress);
           setTransferMsg(`Uploading: ${progress}%`);
         }
+      };
+      
+      const uploadPromise = new Promise<{ message: string; error?: string }>((resolve, reject) => {
+        xhr.onload = () => {
+          if (xhr.status === 200) {
+            try {
+              const response = JSON.parse(xhr.responseText);
+              resolve(response);
+            } catch (err) {
+              reject(new Error('Invalid response format'));
+            }
+          } else {
+            try {
+              const error = JSON.parse(xhr.responseText);
+              reject(new Error(error.error || 'Upload failed'));
+            } catch (err) {
+              reject(new Error('Upload failed'));
+            }
+          }
+        };
+        
+        xhr.onerror = () => reject(new Error('Network error'));
       });
+      
+      xhr.send(formData);
+      const response = await uploadPromise;
       
       setStatus('File uploaded successfully!');
       setStep('done');
