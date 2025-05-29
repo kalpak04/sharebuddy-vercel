@@ -11,7 +11,30 @@ const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 const multer = require('multer');
 const fs = require('fs');
-const upload = multer({ dest: 'uploads/' }); // Directory to store files
+const path = require('path');
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(__dirname, 'uploads');
+      fs.mkdir(dir, { recursive: true })
+        .then(() => cb(null, dir))
+        .catch(err => cb(err));
+    },
+    filename: (req, file, cb) => {
+      // Generate unique filename
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  }),
+  limits: {
+    fileSize: 1024 * 1024 * 1024 * 2, // 2GB max file size
+    files: 1 // Max number of files
+  },
+  fileFilter: (req, file, cb) => {
+    // Add any file type restrictions here if needed
+    cb(null, true);
+  }
+}).single('file');
 const ftpServer = require('./ftp-server');
 const { pool, checkDatabaseHealth } = require('./db');
 
@@ -39,19 +62,6 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   }
 });
-
-// Health check function for database
-async function checkDatabaseHealth() {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT NOW()');
-    client.release();
-    return result.rows[0] ? true : false;
-  } catch (err) {
-    console.error('Database health check failed:', err);
-    return false;
-  }
-}
 
 // Graceful shutdown handler
 async function gracefulShutdown(signal) {
@@ -445,39 +455,138 @@ setInterval(async () => {
   }
 }, 5 * 60 * 1000);
 
-// File upload endpoint
-app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
-  try {
-    const file = req.file;
-    const userId = req.user.userId;
-    const hostSocketId = req.body.hostSocketId;
-    if (!file || !hostSocketId) {
-      return res.status(400).json({ error: 'File and hostSocketId are required.' });
+// Enhanced file upload endpoint with progress tracking
+app.post('/upload', authMiddleware, (req, res) => {
+  upload(req, res, async (err) => {
+    const startTime = Date.now();
+    
+    try {
+      // Handle multer errors
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ error: 'File size too large. Maximum size is 2GB.' });
+        }
+        throw err;
+      } else if (err) {
+        throw err;
+      }
+
+      const file = req.file;
+      const userId = req.user.userId;
+      const hostSocketId = req.body.hostSocketId;
+      
+      console.log('Upload request received:', {
+        userId,
+        hostSocketId,
+        filename: file?.originalname,
+        size: file?.size,
+        mimetype: file?.mimetype
+      });
+
+      if (!file || !hostSocketId) {
+        return res.status(400).json({ error: 'File and hostSocketId are required.' });
+      }
+
+      // Check host's reserved storage
+      const { rows: hostRows } = await pool.query('SELECT storage, user_id FROM hosts WHERE socket_id = $1', [hostSocketId]);
+      if (!hostRows[0]) {
+        // Cleanup: remove uploaded file
+        await fs.unlink(file.path);
+        return res.status(404).json({ error: 'Host not found.' });
+      }
+
+      const reservedStorage = (hostRows[0].storage || 0) * 1024 * 1024 * 1024; // Convert GB to bytes
+      
+      // Calculate used storage
+      const { rows: usedRows } = await pool.query(
+        'SELECT COALESCE(SUM(size), 0) AS used FROM files WHERE host_socket_id = $1',
+        [hostSocketId]
+      );
+      
+      const usedStorage = parseInt(usedRows[0].used, 10);
+      const availableStorage = reservedStorage - usedStorage;
+
+      console.log('Storage check:', {
+        hostId: hostRows[0].user_id,
+        reserved: Math.floor(reservedStorage / (1024 * 1024)) + 'MB',
+        used: Math.floor(usedStorage / (1024 * 1024)) + 'MB',
+        available: Math.floor(availableStorage / (1024 * 1024)) + 'MB',
+        fileSize: Math.floor(file.size / (1024 * 1024)) + 'MB'
+      });
+
+      if (file.size > availableStorage) {
+        // Cleanup: remove uploaded file
+        await fs.unlink(file.path);
+        return res.status(400).json({ 
+          error: 'Not enough storage available on host.',
+          available: Math.floor(availableStorage / (1024 * 1024)) + 'MB',
+          required: Math.floor(file.size / (1024 * 1024)) + 'MB'
+        });
+      }
+
+      // Store file metadata in DB
+      const { rows: fileRows } = await pool.query(
+        'INSERT INTO files (user_id, host_socket_id, filename, size, path) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [userId, hostSocketId, file.originalname, file.size, file.path]
+      );
+
+      // Calculate transfer metrics
+      const transferTime = (Date.now() - startTime) / 1000; // seconds
+      const speedMBps = (file.size / (1024 * 1024)) / transferTime;
+
+      // Notify connected clients
+      io.to(hostSocketId).emit('file-transfer', {
+        fileId: fileRows[0].id,
+        filename: file.originalname,
+        size: file.size,
+        path: file.path,
+        userId: req.user.userId,
+        username: req.user.username,
+        transferSpeed: speedMBps.toFixed(2) + ' MB/s',
+        timestamp: new Date().toISOString()
+      });
+
+      console.log('Upload completed:', {
+        fileId: fileRows[0].id,
+        filename: file.originalname,
+        size: Math.floor(file.size / 1024) + 'KB',
+        speed: speedMBps.toFixed(2) + ' MB/s',
+        duration: transferTime.toFixed(2) + 's'
+      });
+
+      res.status(200).json({ 
+        message: 'File uploaded successfully',
+        fileId: fileRows[0].id,
+        transferSpeed: speedMBps.toFixed(2) + ' MB/s',
+        duration: transferTime.toFixed(2) + 's'
+      });
+
+    } catch (error) {
+      console.error('Upload error:', error);
+      
+      // Cleanup: remove uploaded file if it exists
+      if (req.file) {
+        try {
+          await fs.unlink(req.file.path);
+        } catch (unlinkError) {
+          console.error('Error removing failed upload:', unlinkError);
+        }
+      }
+
+      // Notify clients about failure if we have the connection info
+      if (req.body.hostSocketId) {
+        io.to(req.body.hostSocketId).emit('file-transfer-error', {
+          filename: req.file?.originalname,
+          error: error.message
+        });
+      }
+
+      res.status(500).json({ 
+        error: 'File upload failed',
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      });
     }
-    // Check host's reserved storage
-    const { rows: hostRows } = await pool.query('SELECT storage FROM hosts WHERE socket_id = $1', [hostSocketId]);
-    if (!hostRows[0]) {
-      return res.status(404).json({ error: 'Host not found.' });
-    }
-    const reservedStorage = hostRows[0].storage || 0;
-    // Calculate used storage
-    const { rows: usedRows } = await pool.query('SELECT COALESCE(SUM(size), 0) AS used FROM files WHERE host_socket_id = $1', [hostSocketId]);
-    const usedStorage = parseInt(usedRows[0].used, 10);
-    if (usedStorage + file.size > reservedStorage) {
-      // Remove uploaded file from disk
-      fs.unlinkSync(file.path);
-      return res.status(400).json({ error: 'Not enough storage available on host.' });
-    }
-    // Store file metadata in DB
-    await pool.query(
-      'INSERT INTO files (user_id, host_socket_id, filename, size, path) VALUES ($1, $2, $3, $4, $5)',
-      [userId, hostSocketId, file.originalname, file.size, file.path]
-    );
-    res.status(200).json({ message: 'File uploaded successfully.' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'File upload failed.' });
-  }
+  });
 });
 
 // Enhanced health check endpoint
