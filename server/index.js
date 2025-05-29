@@ -14,6 +14,22 @@ const multer = require('multer');
 const fs = require('fs');
 const upload = multer({ dest: 'uploads/' }); // Directory to store files
 
+// Constants
+const MAX_POOL_SIZE = process.env.MAX_POOL_SIZE || 20;
+const IDLE_TIMEOUT_MS = process.env.IDLE_TIMEOUT_MS || 30000;
+const CONNECTION_TIMEOUT_MS = process.env.CONNECTION_TIMEOUT_MS || 5000;
+
+// Database Configuration
+const dbConfig = {
+  // Support both individual vars and connection string
+  connectionString: process.env.DATABASE_URL || `postgres://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: MAX_POOL_SIZE,
+  idleTimeoutMillis: IDLE_TIMEOUT_MS,
+  connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
+  application_name: 'sharebuddy_backend'
+};
+
 const app = express();
 app.use(helmet());
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 }));
@@ -33,8 +49,56 @@ const io = new Server(server, {
   }
 });
 
-// PostgreSQL pool
-const pool = new Pool();
+// Initialize PostgreSQL pool with advanced configuration
+const pool = new Pool(dbConfig);
+
+// Global error handler for unexpected pool errors
+pool.on('error', (err) => {
+  console.error('Unexpected database error:', err);
+  // Don't exit process - instead notify monitoring and handle gracefully
+  if (process.env.NODE_ENV === 'production') {
+    // TODO: Add your monitoring service notification here
+    console.error('Critical database error - notifying monitoring service');
+  }
+});
+
+// Health check function for database
+async function checkDatabaseHealth() {
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT NOW()');
+    client.release();
+    return result.rows[0] ? true : false;
+  } catch (err) {
+    console.error('Database health check failed:', err);
+    return false;
+  }
+}
+
+// Graceful shutdown handler
+async function gracefulShutdown(signal) {
+  console.log(`${signal} signal received: closing HTTP server...`);
+  
+  // Stop accepting new requests
+  server.close(() => {
+    console.log('HTTP server closed');
+    
+    // Close database pool
+    pool.end().then(() => {
+      console.log('Database pool has ended');
+      process.exit(0);
+    }).catch((err) => {
+      console.error('Error closing database pool:', err);
+      process.exit(1);
+    });
+  });
+
+  // Force close after timeout
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+}
 
 // Ensure all tables exist (users, hosts, renters, files)
 (async () => {
@@ -323,6 +387,26 @@ app.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
     res.status(500).json({ error: 'File upload failed.' });
   }
 });
+
+// Enhanced health check endpoint
+app.get('/health', async (req, res) => {
+  const dbHealthy = await checkDatabaseHealth();
+  const status = {
+    server: true,
+    database: dbHealthy,
+    timestamp: new Date().toISOString()
+  };
+  
+  if (!dbHealthy) {
+    return res.status(503).json(status);
+  }
+  
+  res.json(status);
+});
+
+// Attach shutdown handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {

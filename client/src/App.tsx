@@ -23,6 +23,20 @@ type ConnectionRequest = {
   size: number;
 };
 
+// --- Types for hosts and renters ---
+interface Host {
+  id?: string;
+  socket_id: string;
+  storage: number;
+  distance?: number;
+}
+interface Renter {
+  id?: string;
+  socket_id: string;
+  filename?: string;
+  size?: number;
+}
+
 const App: React.FC = () => {
   const [role, setRole] = useState<PeerRole | null>(null);
   const [step, setStep] = useState<Step>('choose');
@@ -30,8 +44,8 @@ const App: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState('');
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [hosts, setHosts] = useState<any[]>([]);
-  const [renters, setRenters] = useState<any[]>([]);
+  const [hosts, setHosts] = useState<Host[]>([]);
+  const [renters, setRenters] = useState<Renter[]>([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [transferMsg, setTransferMsg] = useState('');
@@ -41,7 +55,7 @@ const App: React.FC = () => {
   const [peerSocketId, setPeerSocketId] = useState<string | null>(null);
   const [connRequest, setConnRequest] = useState<ConnectionRequest | null>(null);
   const [showDialog, setShowDialog] = useState(false);
-  const [selectedHost, setSelectedHost] = useState<any | null>(null);
+  const [selectedHost, setSelectedHost] = useState<Host | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const [auth, setAuth] = useState<{ token: string; email: string } | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
@@ -67,6 +81,9 @@ const App: React.FC = () => {
       button: { textTransform: 'none', fontWeight: 600 }
     }
   });
+
+  // TODO: Move encryption key to a secure location for production
+  const ENCRYPTION_KEY = 'sharebuddy-key';
 
   // Auth API
   const handleAuth = async () => {
@@ -105,17 +122,22 @@ const App: React.FC = () => {
 
   // --- WebRTC Signaling Logic ---
   const handleSignal = async (payload: any) => {
-    console.log('Received signal event:', payload);
-    if (!peerConnection.current) return;
-    if (payload.signal.type === 'offer') {
-      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
-      const answer = await peerConnection.current.createAnswer();
-      await peerConnection.current.setLocalDescription(answer);
-      socket?.emit(SIGNAL_EVENT, { target: payload.from, signal: answer });
-    } else if (payload.signal.type === 'answer') {
-      await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
-    } else if (payload.signal.candidate) {
-      await peerConnection.current.addIceCandidate(new RTCIceCandidate(payload.signal));
+    try {
+      console.log('Received signal event:', payload);
+      if (!peerConnection.current) return;
+      if (payload.signal.type === 'offer') {
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
+        const answer = await peerConnection.current.createAnswer();
+        await peerConnection.current.setLocalDescription(answer);
+        socket?.emit(SIGNAL_EVENT, { target: payload.from, signal: answer });
+      } else if (payload.signal.type === 'answer') {
+        await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.signal));
+      } else if (payload.signal.candidate) {
+        await peerConnection.current.addIceCandidate(new RTCIceCandidate(payload.signal));
+      }
+    } catch (err: any) {
+      setStatus('WebRTC signaling error: ' + err.message);
+      console.error('WebRTC signaling error:', err);
     }
   };
 
@@ -166,9 +188,11 @@ const App: React.FC = () => {
         setStep('host-wait');
         setLoading(false);
       }, (err) => {
-        setStatus('Location required to offer storage.');
+        setStatus('Location required to offer storage. Error: ' + err.message);
         setLoading(false);
       });
+    } else {
+      setStatus('Please enter available storage.');
     }
   };
 
@@ -178,31 +202,34 @@ const App: React.FC = () => {
       setLoading(true);
       navigator.geolocation.getCurrentPosition((pos) => {
         const { latitude, longitude } = pos.coords;
-        // Request nearby hosts from backend (10km radius)
         socket.emit('get-nearby-hosts', { latitude, longitude, radiusKm: 10 });
         setStatus('Searching for nearby hosts...');
         setLoading(false);
       }, (err) => {
-        setStatus('Location required to find storage.');
+        setStatus('Location required to find storage. Error: ' + err.message);
         setLoading(false);
       });
+    } else {
+      setStatus('Please select a file to store.');
     }
   };
 
   // --- Renter: Connect to selected host ---
-  const connectToHost = (host: any) => {
+  const connectToHost = (host: Host) => {
     if (socket && file && host) {
       setPeerSocketId(host.socket_id);
       setSelectedHost(host);
       socket.emit(REQUEST_EVENT, { target: host.socket_id, filename: file.name, size: file.size, from: socket.id });
       setStatus('Requesting connection to host...');
+    } else {
+      setStatus('Please select a file and a host.');
     }
   };
 
   // Listen for nearby hosts and update UI
   useEffect(() => {
     if (!socket) return;
-    const handleNearbyHosts = (hosts: any[]) => setHosts(hosts);
+    const handleNearbyHosts = (hosts: Host[]) => setHosts(hosts);
     socket.on('nearby-hosts', handleNearbyHosts);
     return () => { socket.off('nearby-hosts', handleNearbyHosts); };
   }, [socket]);
@@ -259,55 +286,27 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Renter: Send File Chunks ---
-  const sendFileChunks = async () => {
-    if (!file || !dataChannel.current) return;
-    try {
-      console.log('Data channel open, starting file transfer...');
-      setTransferMsg('Encrypting file...');
-      const arrayBuffer = await file.arrayBuffer();
-      const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
-      const encrypted = CryptoJS.AES.encrypt(wordArray, 'sharebuddy-key').toString();
-      setTransferMsg('Sending file...');
-      let offset = 0;
-      while (offset < encrypted.length) {
-        const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
-        dataChannel.current.send(chunk);
-        console.log('Sent chunk:', chunk.length, 'bytes');
-        offset += CHUNK_SIZE;
-        setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
-        await new Promise((res) => setTimeout(res, 10));
-      }
-      dataChannel.current.send('__END__');
-      console.log('Sent __END__');
-      setTransferMsg('File sent!');
-      setStep('done');
-    } catch (err: any) {
-      setTransferMsg('File transfer error: ' + err.message);
-      setStatus('File transfer error: ' + err.message);
-      console.error('File transfer error:', err);
-    }
-  };
-
   // --- Host: Receive File Chunks ---
-  let receivedChunks: string[] = [];
+  const receivedChunksRef = useRef<string[]>([]);
   const receiveFileChunks = (event: MessageEvent) => {
     try {
       console.log('Host received chunk:', event.data);
       if (event.data === '__END__') {
         setTransferMsg('Decrypting file...');
-        const encrypted = receivedChunks.join('');
-        const decrypted = CryptoJS.AES.decrypt(encrypted, 'sharebuddy-key');
+        const encrypted = receivedChunksRef.current.join('');
+        // Decrypt from base64
+        const decrypted = CryptoJS.AES.decrypt(encrypted, ENCRYPTION_KEY);
         const typedArray = wordArrayToUint8Array(decrypted);
         const blob = new Blob([typedArray]);
         setReceivedFile(blob);
         setTransferMsg('File received and decrypted!');
         setStep('done');
-        receivedChunks = [];
+        receivedChunksRef.current = [];
         setProgress(100);
       } else {
-        receivedChunks.push(event.data);
-        setProgress(Math.min(100, Math.round((receivedChunks.join('').length / (file?.size || 1)) * 100)));
+        receivedChunksRef.current.push(event.data);
+        // Use connRequest?.size for progress calculation
+        setProgress(Math.min(100, Math.round((receivedChunksRef.current.join('').length / (connRequest?.size || 1)) * 100)));
       }
     } catch (err: any) {
       setTransferMsg('File receive error: ' + err.message);
@@ -359,7 +358,10 @@ const App: React.FC = () => {
 
   // Add after connectToHost function
   const uploadFileToHost = async () => {
-    if (!file || !selectedHost || !auth) return;
+    if (!file || !selectedHost || !auth) {
+      setStatus('Missing file, host, or authentication.');
+      return;
+    }
     setLoading(true);
     setStatus('Uploading file to host...');
     try {
@@ -381,6 +383,44 @@ const App: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // --- Renter: Send File Chunks ---
+  const sendFileChunks = async () => {
+    if (!file || !dataChannel.current) {
+      setStatus('No file or data channel for transfer.');
+      return;
+    }
+    try {
+      console.log('Data channel open, starting file transfer...');
+      setTransferMsg('Encrypting file...');
+      const arrayBuffer = await file.arrayBuffer();
+      const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
+      // Encrypt and encode as base64
+      const encrypted = CryptoJS.AES.encrypt(wordArray, ENCRYPTION_KEY).toString();
+      setTransferMsg('Sending file...');
+      let offset = 0;
+      while (offset < encrypted.length) {
+        const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
+        dataChannel.current.send(chunk);
+        console.log('Sent chunk:', chunk.length, 'bytes');
+        offset += CHUNK_SIZE;
+        setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
+        await new Promise((res) => setTimeout(res, 10));
+      }
+      dataChannel.current.send('__END__');
+      console.log('Sent __END__');
+      setTransferMsg('File sent!');
+      setStep('done');
+    } catch (err: any) {
+      setTransferMsg('File transfer error: ' + err.message);
+      setStatus('File transfer error: ' + err.message);
+      console.error('File transfer error:', err);
+    }
+  };
+
+  // --- UI/UX Clarification for Transfer Flows ---
+  // If both uploadFileToHost and peer-to-peer are available, show a warning
+  const bothFlowsAvailable = !!(selectedHost && file && socket && dataChannel.current);
 
   // Main UI
   if (!auth) {
@@ -592,6 +632,13 @@ const App: React.FC = () => {
                 </Button>
               )}
               <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Back to Home</Button>
+            </Box>
+          )}
+          {bothFlowsAvailable && (
+            <Box mb={2}>
+              <Typography color="warning.main">
+                Warning: Both server upload and peer-to-peer transfer are available. Please use only one method to avoid confusion.
+              </Typography>
             </Box>
           )}
           <Dialog open={showDialog} onClose={() => respondToRequest(false)}>
