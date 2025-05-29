@@ -1,6 +1,8 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('fs');
+const { promisify } = require('util');
+const checkDiskSpace = require('check-disk-space').default;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require('electron-squirrel-startup')) {
@@ -76,5 +78,75 @@ ipcMain.handle('save-file', async (event, folder, filename, fileBuffer) => {
   } catch (err) {
     console.error('Error saving file:', err);
     return false;
+  }
+});
+
+// Add IPC handler to check disk space
+ipcMain.handle('check-disk-space', async (event, folderPath) => {
+  try {
+    if (!folderPath) return null;
+    const space = await checkDiskSpace(folderPath);
+    return {
+      free: space.free,
+      total: space.size,
+      available: space.free
+    };
+  } catch (err) {
+    console.error('Error checking disk space:', err);
+    return null;
+  }
+});
+
+// Add IPC handler for streaming file writes
+ipcMain.handle('stream-file', async (event, folder, filename) => {
+  try {
+    const filePath = path.join(folder, filename);
+    const writeStream = fs.createWriteStream(filePath);
+    
+    // Store the write stream in a map using the filePath as key
+    if (!global.writeStreams) global.writeStreams = new Map();
+    global.writeStreams.set(filePath, writeStream);
+    
+    return { success: true, filePath };
+  } catch (err) {
+    console.error('Error creating write stream:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('stream-chunk', async (event, filePath, chunk) => {
+  try {
+    const writeStream = global.writeStreams.get(filePath);
+    if (!writeStream) throw new Error('No write stream found for file');
+    
+    return new Promise((resolve, reject) => {
+      writeStream.write(Buffer.from(chunk), (err) => {
+        if (err) reject(err);
+        else resolve({ success: true });
+      });
+    });
+  } catch (err) {
+    console.error('Error writing chunk:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('end-stream', async (event, filePath) => {
+  try {
+    const writeStream = global.writeStreams.get(filePath);
+    if (!writeStream) throw new Error('No write stream found for file');
+    
+    await new Promise((resolve, reject) => {
+      writeStream.end((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    
+    global.writeStreams.delete(filePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Error ending write stream:', err);
+    return { success: false, error: err.message };
   }
 });
