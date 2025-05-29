@@ -357,6 +357,31 @@ const App: React.FC = () => {
     setSelectedHost(null);
   };
 
+  // Add after connectToHost function
+  const uploadFileToHost = async () => {
+    if (!file || !selectedHost || !auth) return;
+    setLoading(true);
+    setStatus('Uploading file to host...');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('hostSocketId', selectedHost.socket_id);
+      const res = await fetch(`${SOCKET_URL}/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${auth.token}` },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      setStatus('File uploaded successfully!');
+      setStep('done');
+    } catch (err: any) {
+      setStatus('Upload error: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Main UI
   if (!auth) {
     return (
@@ -523,6 +548,18 @@ const App: React.FC = () => {
                       ))}
                     </List>
                   </Box>
+                  {selectedHost && (
+                    <Button
+                      variant="contained"
+                      color="primary"
+                      fullWidth
+                      disabled={!file || loading}
+                      onClick={uploadFileToHost}
+                      sx={{ mt: 2 }}
+                    >
+                      {loading ? <CircularProgress size={24} /> : 'Upload to Selected Host'}
+                    </Button>
+                  )}
                   <Button fullWidth onClick={reset} color="secondary" sx={{ mt: 2 }}>Cancel</Button>
                 </>
               )}
