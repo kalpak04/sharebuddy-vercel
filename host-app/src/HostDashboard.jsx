@@ -311,79 +311,75 @@ const HostDashboard = () => {
   const receiveFileChunks = async (event) => {
     try {
       const data = JSON.parse(event.data);
-      
+      console.log('Host received message:', data.type);
+
       // Handle transfer initialization
       if (data.type === 'start') {
         console.log('Starting new transfer:', data);
-        decryptionKey.current = data.key;
-        chunkSize.current = data.chunkSize;
-        receivedSize.current = 0;
-        
-        // Validate file size and type
-        if (data.size > parseInt(reserved, 10) * 1024 * 1024 * 1024) {
-          dataChannel.current.send(JSON.stringify({ type: 'error', message: 'File exceeds reserved storage' }));
-          return;
-        }
-        
-        const ext = data.filename.split('.').pop().toLowerCase();
-        const allowedTypes = ['pdf', 'txt', 'jpg', 'png', 'jpeg', 'docx'];
-        if (!allowedTypes.includes(ext)) {
-          dataChannel.current.send(JSON.stringify({ type: 'error', message: 'File type not allowed' }));
-          return;
-        }
-        
-        // Initialize file stream
-        const streamResult = await window.electronAPI.streamFile(folder, data.filename);
-        if (!streamResult.success) {
-          dataChannel.current.send(JSON.stringify({ type: 'error', message: streamResult.error }));
-          return;
-        }
-        
         setActiveTransfer({
           filename: data.filename,
           size: data.size,
-          filePath: streamResult.filePath
+          chunks: []
         });
+        decryptionKey.current = data.key;
+        chunkSize.current = data.chunkSize;
+        receivedSize.current = 0;
+        setTransferMsg('Starting file transfer...');
         
-        setTransferMsg('Receiving file...');
+        // Send ready signal
         dataChannel.current.send(JSON.stringify({ type: 'ready' }));
         return;
       }
       
       // Handle chunk
       if (data.type === 'chunk' && activeTransfer) {
-        const decrypted = CryptoJS.AES.decrypt(data.chunk, decryptionKey.current);
-        const chunk = wordArrayToUint8Array(decrypted);
-        
-        const result = await window.electronAPI.streamChunk(activeTransfer.filePath, chunk);
-        if (!result.success) {
-          dataChannel.current.send(JSON.stringify({ type: 'error', message: result.error }));
-          return;
+        try {
+          const decrypted = CryptoJS.AES.decrypt(data.chunk, decryptionKey.current);
+          const chunk = wordArrayToUint8Array(decrypted);
+          
+          // Store chunk
+          activeTransfer.chunks.push(chunk);
+          receivedSize.current += chunk.length;
+          
+          // Update progress
+          const progress = Math.min(100, Math.round((receivedSize.current / activeTransfer.size) * 100));
+          setProgress(progress);
+          setTransferMsg(`Receiving file: ${progress}%`);
+          
+          // Send acknowledgment
+          dataChannel.current.send(JSON.stringify({ 
+            type: 'ack', 
+            received: receivedSize.current 
+          }));
+        } catch (err) {
+          console.error('Chunk processing error:', err);
+          dataChannel.current.send(JSON.stringify({ 
+            type: 'error', 
+            message: 'Failed to process chunk: ' + err.message 
+          }));
         }
-        
-        receivedSize.current += chunk.length;
-        setProgress(Math.min(100, Math.round((receivedSize.current / activeTransfer.size) * 100)));
-        
-        // Acknowledge chunk
-        dataChannel.current.send(JSON.stringify({ type: 'ack', received: receivedSize.current }));
         return;
       }
       
       // Handle end of transfer
       if (data.type === 'end' && activeTransfer) {
-        const result = await window.electronAPI.endStream(activeTransfer.filePath);
-        if (!result.success) {
-          dataChannel.current.send(JSON.stringify({ type: 'error', message: result.error }));
-          return;
+        setTransferMsg('Completing transfer...');
+        
+        // Combine all chunks
+        const completeFile = new Blob(activeTransfer.chunks);
+        setReceivedFile(completeFile);
+        
+        // Save file using electron API
+        if (window.electronAPI && window.electronAPI.saveFile) {
+          await window.electronAPI.saveFile(folder, activeTransfer.filename, await completeFile.arrayBuffer());
+          setStoredFiles(prev => [...prev, { 
+            name: activeTransfer.filename, 
+            size: activeTransfer.size 
+          }]);
+          setStatus(`File saved: ${activeTransfer.filename}`);
         }
         
-        setStoredFiles(prev => [...prev, { 
-          name: activeTransfer.filename, 
-          size: activeTransfer.size 
-        }]);
-        
         setTransferMsg('File received successfully!');
-        setStatus(`File saved: ${activeTransfer.filename}`);
         setProgress(100);
         
         // Reset transfer state
@@ -392,7 +388,7 @@ const HostDashboard = () => {
         chunkSize.current = 0;
         receivedSize.current = 0;
         
-        // Acknowledge completion
+        // Send completion acknowledgment
         dataChannel.current.send(JSON.stringify({ type: 'complete' }));
       }
       
@@ -400,10 +396,12 @@ const HostDashboard = () => {
       console.error('File receive error:', err);
       setTransferMsg('File receive error: ' + err.message);
       setStatus('File receive error: ' + err.message);
-      setToast({ open: true, message: 'File receive error: ' + err.message, severity: 'error' });
       
       if (dataChannel.current && dataChannel.current.readyState === 'open') {
-        dataChannel.current.send(JSON.stringify({ type: 'error', message: err.message }));
+        dataChannel.current.send(JSON.stringify({ 
+          type: 'error', 
+          message: err.message 
+        }));
       }
     }
   };

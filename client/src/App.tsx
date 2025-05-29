@@ -440,21 +440,75 @@ const App: React.FC = () => {
       setTransferMsg('Encrypting file...');
       const arrayBuffer = await file.arrayBuffer();
       const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
-      // Encrypt and encode as base64
-      const encrypted = CryptoJS.AES.encrypt(wordArray, ENCRYPTION_KEY).toString();
+      
+      // Send start signal with metadata
+      dataChannel.current.send(JSON.stringify({
+        type: 'start',
+        filename: file.name,
+        size: file.size,
+        chunkSize: CHUNK_SIZE,
+        key: ENCRYPTION_KEY
+      }));
+
+      // Wait for ready signal
+      await new Promise((resolve) => {
+        const onMessage = (event: MessageEvent) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'ready') {
+            dataChannel.current?.removeEventListener('message', onMessage);
+            resolve(true);
+          }
+        };
+        dataChannel.current?.addEventListener('message', onMessage);
+      });
+
       setTransferMsg('Sending file...');
       let offset = 0;
-      while (offset < encrypted.length) {
-        const chunk = encrypted.slice(offset, offset + CHUNK_SIZE);
-        dataChannel.current.send(chunk);
-        console.log('Sent chunk:', chunk.length, 'bytes');
+      while (offset < arrayBuffer.byteLength) {
+        const chunk = new Uint8Array(arrayBuffer.slice(offset, offset + CHUNK_SIZE));
+        const chunkWordArray = CryptoJS.lib.WordArray.create(chunk as any);
+        const encryptedChunk = CryptoJS.AES.encrypt(chunkWordArray, ENCRYPTION_KEY).toString();
+        
+        dataChannel.current.send(JSON.stringify({
+          type: 'chunk',
+          chunk: encryptedChunk
+        }));
+
         offset += CHUNK_SIZE;
-        setProgress(Math.min(100, Math.round((offset / encrypted.length) * 100)));
-        await new Promise((res) => setTimeout(res, 10));
+        setProgress(Math.min(100, Math.round((offset / arrayBuffer.byteLength) * 100)));
+        
+        // Wait for acknowledgment
+        await new Promise((resolve) => {
+          const onMessage = (event: MessageEvent) => {
+            const data = JSON.parse(event.data);
+            if (data.type === 'ack') {
+              dataChannel.current?.removeEventListener('message', onMessage);
+              resolve(true);
+            }
+          };
+          dataChannel.current?.addEventListener('message', onMessage);
+        });
+
+        await new Promise(res => setTimeout(res, 10)); // Small delay between chunks
       }
-      dataChannel.current.send('__END__');
-      console.log('Sent __END__');
-      setTransferMsg('File sent!');
+
+      // Send end signal
+      dataChannel.current.send(JSON.stringify({ type: 'end' }));
+      
+      // Wait for completion acknowledgment
+      await new Promise((resolve) => {
+        const onMessage = (event: MessageEvent) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'complete') {
+            dataChannel.current?.removeEventListener('message', onMessage);
+            resolve(true);
+          }
+        };
+        dataChannel.current?.addEventListener('message', onMessage);
+      });
+
+      console.log('File transfer completed');
+      setTransferMsg('File sent successfully!');
       setStep('done');
     } catch (err: any) {
       setTransferMsg('File transfer error: ' + err.message);
