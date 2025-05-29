@@ -1,54 +1,49 @@
-const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const crypto = require('crypto');
 
 class StorageService {
   constructor() {
-    this.s3Client = new S3Client({
-      region: process.env.S3_REGION || 'auto',
+    this.client = new S3Client({
+      region: process.env.S3_REGION || 'us-east-1',
       endpoint: process.env.S3_ENDPOINT,
       credentials: {
         accessKeyId: process.env.S3_ACCESS_KEY,
-        secretAccessKey: process.env.S3_SECRET_KEY
-      }
+        secretAccessKey: process.env.S3_SECRET_KEY,
+      },
+      forcePathStyle: true, // Required for MinIO
     });
-    this.bucket = process.env.S3_BUCKET;
+    this.bucket = process.env.S3_BUCKET || 'sharebuddy';
   }
 
-  async generateUploadUrl(fileName, fileType, userId, hostId) {
-    try {
-      const fileKey = `${userId}/${hostId}/${crypto.randomUUID()}-${fileName}`;
-      const command = new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: fileKey,
-        ContentType: fileType,
-        Metadata: {
-          userId: userId.toString(),
-          hostId: hostId.toString(),
-          originalName: fileName
-        }
-      });
+  async uploadFile(fileBuffer, originalName, contentType) {
+    const fileKey = `${crypto.randomUUID()}-${originalName}`;
+    
+    await this.client.send(new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: fileKey,
+      Body: fileBuffer,
+      ContentType: contentType,
+    }));
 
-      const signedUrl = await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
-      return { signedUrl, fileKey };
-    } catch (error) {
-      console.error('Error generating upload URL:', error);
-      throw new Error('Failed to generate upload URL');
-    }
+    return fileKey;
   }
 
   async generateDownloadUrl(fileKey) {
-    try {
-      const command = new GetObjectCommand({
-        Bucket: this.bucket,
-        Key: fileKey
-      });
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: fileKey,
+    });
 
-      return await getSignedUrl(this.s3Client, command, { expiresIn: 3600 });
-    } catch (error) {
-      console.error('Error generating download URL:', error);
-      throw new Error('Failed to generate download URL');
-    }
+    // URL expires in 1 hour
+    return await getSignedUrl(this.client, command, { expiresIn: 3600 });
+  }
+
+  async deleteFile(fileKey) {
+    await this.client.send(new DeleteObjectCommand({
+      Bucket: this.bucket,
+      Key: fileKey,
+    }));
   }
 }
 

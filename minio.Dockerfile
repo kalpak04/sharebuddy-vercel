@@ -8,9 +8,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -f http://localhost:9000/minio/health/live || exit 1
 
 # Expose MinIO server and console ports
-EXPOSE 9000 9001
+EXPOSE 9000
+EXPOSE 9001
 
-# Set the command to run MinIO server with proper configuration
+ENTRYPOINT ["minio"]
 CMD ["server", "/data", "--console-address", ":9001", "--address", ":9000"]
 
 # Set environment variables
