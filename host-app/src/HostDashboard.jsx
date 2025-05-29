@@ -30,6 +30,7 @@ const HostDashboard = () => {
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authUsername, setAuthUsername] = useState('');
   const [authError, setAuthError] = useState('');
 
   const PRIVACY_NOTICE = `To help renters find your device, ShareBuddy will use your approximate location (city-level, never your exact address) via a secure IP geolocation service. Your location is only used for matching and never shared with third parties.`;
@@ -73,10 +74,15 @@ const HostDashboard = () => {
   const handleAuth = async () => {
     setAuthError('');
     try {
-      const res = await axios.post(`${SOCKET_URL}/${authMode}`, { email: authEmail, password: authPassword });
+      const body = authMode === 'login' 
+        ? { email: authEmail, password: authPassword }
+        : { email: authEmail, password: authPassword, username: authUsername };
+        
+      const res = await axios.post(`${SOCKET_URL}/${authMode}`, body);
       setAuth({ token: res.data.token, email: res.data.email });
       setAuthEmail('');
       setAuthPassword('');
+      setAuthUsername('');
     } catch (err) {
       setAuthError(err.response?.data?.error || 'Auth failed');
       setStatus('Error: ' + (err.response?.data?.error || err.message));
@@ -321,15 +327,57 @@ const HostDashboard = () => {
         <Paper elevation={6} sx={{ p: 4, mt: 6, borderRadius: 6, backdropFilter: 'blur(8px)', background: darkMode ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.85)', boxShadow: '0 8px 32px 0 rgba(31,38,135,0.37)', minWidth: 340 }}>
           <Box display="flex" flexDirection="column" alignItems="center" mb={3}>
             <Typography variant="h4" fontWeight={700} gutterBottom>ShareBuddy Host</Typography>
-            <Typography variant="subtitle1" color="text.secondary" gutterBottom>Login or Register to continue</Typography>
+            <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+              {authMode === 'login' ? 'Login to continue' : 'Create your account'}
+            </Typography>
           </Box>
-          <TextField label="Email" type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} fullWidth sx={{ mb: 2 }} autoFocus />
-          <TextField label="Password" type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} fullWidth sx={{ mb: 2 }} />
+          {authMode === 'register' && (
+            <TextField 
+              label="Username" 
+              value={authUsername} 
+              onChange={e => setAuthUsername(e.target.value)} 
+              fullWidth 
+              sx={{ mb: 2 }} 
+              autoFocus
+            />
+          )}
+          <TextField 
+            label="Email" 
+            type="email" 
+            value={authEmail} 
+            onChange={e => setAuthEmail(e.target.value)} 
+            fullWidth 
+            sx={{ mb: 2 }} 
+            autoFocus={authMode === 'login'}
+          />
+          <TextField 
+            label="Password" 
+            type="password" 
+            value={authPassword} 
+            onChange={e => setAuthPassword(e.target.value)} 
+            fullWidth 
+            sx={{ mb: 2 }} 
+          />
           {authError && <Typography color="error" sx={{ mb: 2 }}>{authError}</Typography>}
-          <Button variant="contained" color="primary" fullWidth sx={{ mb: 2 }} onClick={handleAuth}>
+          <Button 
+            variant="contained" 
+            color="primary" 
+            fullWidth 
+            sx={{ mb: 2 }} 
+            onClick={handleAuth}
+            disabled={!authEmail || !authPassword || (authMode === 'register' && !authUsername)}
+          >
             {authMode === 'login' ? 'Login' : 'Register'}
           </Button>
-          <Button fullWidth onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} color="secondary">
+          <Button 
+            fullWidth 
+            onClick={() => {
+              setAuthMode(authMode === 'login' ? 'register' : 'login');
+              setAuthError('');
+              setAuthUsername('');
+            }} 
+            color="secondary"
+          >
             {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
           </Button>
         </Paper>
