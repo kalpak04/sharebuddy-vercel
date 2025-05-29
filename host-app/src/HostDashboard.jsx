@@ -3,6 +3,9 @@ import { Box, Button, Typography, Paper, Container, TextField, List, ListItem, L
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import CryptoJS from 'crypto-js';
+import * as ftp from 'basic-ftp';
+import path from 'path';
+import fs from 'fs/promises';
 
 // Use localhost for development, fallback to production for build
 const SOCKET_URL = "https://sharebuddy-vercel.onrender.com";
@@ -182,17 +185,55 @@ const HostDashboard = () => {
       s.on('file-transfer', async (data) => {
         setStatus(`Receiving file: ${data.filename}`);
         try {
-          if (window.electronAPI && window.electronAPI.saveFile) {
-            await window.electronAPI.saveFile(folder, data.filename, data.fileBuffer);
-            setStoredFiles(prev => [...prev, { name: data.filename, size: data.size }]);
-            setStatus(`File saved: ${data.filename}`);
-          } else {
-            setStatus('File save not available.');
-          }
+          // Create FTP client
+          const client = new ftp.Client();
+          client.ftp.verbose = true; // Enable for debugging
+
+          // Connect to FTP server
+          await client.access({
+            host: new URL(SOCKET_URL).hostname,
+            user: auth?.token,
+            password: socket.id, // Use host's socket ID as password
+            secure: false,
+          });
+
+          // Create a temporary file path
+          const tempPath = path.join(folder, `${data.filename}.encrypted`);
+          const finalPath = path.join(folder, data.filename);
+
+          // Download encrypted file
+          let downloaded = 0;
+          await client.downloadTo(tempPath, data.filename, {
+            overwrite: true,
+            onProgress: (info) => {
+              downloaded = info.bytesOverall;
+              const progress = Math.min(100, Math.round((downloaded / data.size) * 100));
+              setProgress(progress);
+              setTransferMsg(`Downloading: ${progress}%`);
+            }
+          });
+
+          // Read and decrypt file
+          setTransferMsg('Decrypting file...');
+          const encryptedData = await fs.readFile(tempPath, 'utf8');
+          const decrypted = CryptoJS.AES.decrypt(encryptedData, ENCRYPTION_KEY);
+          const fileBuffer = wordArrayToUint8Array(decrypted);
+
+          // Save decrypted file
+          await window.electronAPI.saveFile(folder, data.filename, fileBuffer);
+          
+          // Delete temporary encrypted file
+          await fs.unlink(tempPath);
+
+          // Update UI
+          setStoredFiles(prev => [...prev, { name: data.filename, size: data.size }]);
+          setStatus(`File saved: ${data.filename}`);
+          setProgress(100);
+          setTransferMsg('File received and decrypted successfully!');
         } catch (err) {
-          setStatus('Error saving file.');
-          setToast({ open: true, message: 'Error saving file: ' + err.message, severity: 'error' });
-          console.error('File save error:', err);
+          setStatus('Error receiving file.');
+          setToast({ open: true, message: 'Error receiving file: ' + err.message, severity: 'error' });
+          console.error('File receive error:', err);
         }
       });
 

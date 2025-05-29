@@ -6,6 +6,7 @@ import BackupIcon from '@mui/icons-material/Backup';
 import logo from './logo.svg';
 import { io, Socket } from 'socket.io-client';
 import CryptoJS from 'crypto-js';
+import * as ftp from 'basic-ftp';
 
 // IMPORTANT: Update this URL after backend deployment
 const SOCKET_URL = 'https://sharebuddy-vercel.onrender.com';
@@ -401,29 +402,67 @@ const App: React.FC = () => {
     setSelectedHost(null);
   };
 
-  // Add after connectToHost function
+  // Update uploadFileToHost function
   const uploadFileToHost = async () => {
     if (!file || !selectedHost || !auth) {
       setStatus('Missing file, host, or authentication.');
       return;
     }
     setLoading(true);
-    setStatus('Uploading file to host...');
+    setStatus('Preparing file for upload...');
+    
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('hostSocketId', selectedHost.socket_id);
-      const res = await fetch(`${SOCKET_URL}/upload`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${auth.token}` },
-        body: formData
+      // Create FTP client
+      const client = new ftp.Client();
+      client.ftp.verbose = true; // Enable for debugging
+      
+      // Connect to FTP server (use auth token as username and host socket ID as password)
+      await client.access({
+        host: new URL(SOCKET_URL).hostname,
+        user: auth.token,
+        password: selectedHost.socket_id,
+        secure: false, // We handle encryption ourselves
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      
+      // Encrypt file before upload
+      setStatus('Encrypting file...');
+      const arrayBuffer = await file.arrayBuffer();
+      const wordArray = CryptoJS.lib.WordArray.create(arrayBuffer as any);
+      const encrypted = CryptoJS.AES.encrypt(wordArray, ENCRYPTION_KEY);
+      const encryptedBlob = new Blob([encrypted.toString()]);
+      
+      // Upload encrypted file
+      setStatus('Uploading encrypted file...');
+      const reader = encryptedBlob.stream().getReader();
+      const uploadStream = new ReadableStream({
+        async start(controller) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          controller.close();
+        }
+      });
+      
+      // Upload with progress tracking
+      let uploaded = 0;
+      await client.uploadFrom(uploadStream, file.name, {
+        createDir: true,
+        overwrite: true,
+        onProgress: (info) => {
+          uploaded = info.bytesOverall;
+          const progress = Math.min(100, Math.round((uploaded / encryptedBlob.size) * 100));
+          setProgress(progress);
+          setTransferMsg(`Uploading: ${progress}%`);
+        }
+      });
+      
       setStatus('File uploaded successfully!');
       setStep('done');
     } catch (err: any) {
       setStatus('Upload error: ' + err.message);
+      console.error('Upload error:', err);
     } finally {
       setLoading(false);
     }

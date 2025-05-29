@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "basic-ftp": "^5.0.5",
+    "ftp-srv": "^4.6.3"
+  }
+}

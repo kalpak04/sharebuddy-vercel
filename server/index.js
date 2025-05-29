@@ -13,6 +13,7 @@ const { body, validationResult } = require('express-validator');
 const multer = require('multer');
 const fs = require('fs');
 const upload = multer({ dest: 'uploads/' }); // Directory to store files
+const ftpServer = require('./ftp-server');
 
 // Constants
 const MAX_POOL_SIZE = process.env.MAX_POOL_SIZE || 20;
@@ -536,6 +537,14 @@ app.use((err, req, res, next) => {
     details: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
+
+// Add before the app.listen() call
+ftpServer.on('error', (err) => {
+  console.error('FTP server error:', err);
+});
+
+// Export io for use in ftp-server.js
+module.exports.io = io;
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
