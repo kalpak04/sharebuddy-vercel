@@ -6,15 +6,21 @@ import CryptoJS from 'crypto-js';
 import * as ftp from 'basic-ftp';
 import path from 'path';
 import fs from 'fs/promises';
+import { ipcRenderer } from 'electron';
 
 // Use localhost for development, fallback to production for build
 const SOCKET_URL = "https://sharebuddy-vercel.onrender.com";
+
+// These modules will be available through preload
+const ftpPreload = window.require('basic-ftp');
+const pathPreload = window.require('path');
+const fsPreload = window.require('fs').promises;
 
 const HostDashboard = () => {
   const [folder, setFolder] = useState('');
   const [reserved, setReserved] = useState(1);
   const [diskSpace, setDiskSpace] = useState(null);
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState('offline');
   const [online, setOnline] = useState(false);
   const [socket, setSocket] = useState(null);
   const [storedFiles, setStoredFiles] = useState([]);
@@ -36,6 +42,8 @@ const HostDashboard = () => {
   const [authPassword, setAuthPassword] = useState('');
   const [authUsername, setAuthUsername] = useState('');
   const [authError, setAuthError] = useState('');
+  const [storage, setStorage] = useState(0);
+  const [location, setLocation] = useState({ latitude: null, longitude: null });
 
   const PRIVACY_NOTICE = `To help renters find your device, ShareBuddy will use your approximate location (city-level, never your exact address) via a secure IP geolocation service. Your location is only used for matching and never shared with third parties.`;
 
@@ -481,6 +489,35 @@ const HostDashboard = () => {
     });
     return () => { s.disconnect(); };
   }, [auth]);
+
+  useEffect(() => {
+    // Get storage info
+    ipcRenderer.invoke('get-storage-info').then(storageInfo => {
+      setStorage(storageInfo.available);
+    });
+
+    // Get location
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          setLocation({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          });
+        },
+        error => console.error('Error getting location:', error)
+      );
+    }
+
+    // Listen for status updates
+    ipcRenderer.on('status-update', (event, newStatus) => {
+      setStatus(newStatus);
+    });
+
+    return () => {
+      ipcRenderer.removeAllListeners('status-update');
+    };
+  }, []);
 
   // Main UI
   if (!auth) {
