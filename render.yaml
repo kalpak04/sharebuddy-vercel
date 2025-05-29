@@ -8,18 +8,15 @@ services:
       - key: NODE_ENV
         value: production
       - key: S3_REGION
-        value: us-east-1
+        value: auto
       - key: S3_ENDPOINT
-        fromService:
-          name: sharebuddy-minio
-          type: web
-          property: hostport
+        sync: false
       - key: S3_ACCESS_KEY
         sync: false
       - key: S3_SECRET_KEY
         sync: false
       - key: S3_BUCKET
-        value: sharebuddy
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: sharebuddy-db

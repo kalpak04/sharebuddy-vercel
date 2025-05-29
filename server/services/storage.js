@@ -5,15 +5,14 @@ const crypto = require('crypto');
 class StorageService {
   constructor() {
     this.client = new S3Client({
-      region: process.env.S3_REGION || 'us-east-1',
-      endpoint: process.env.S3_ENDPOINT,
+      region: 'auto',
+      endpoint: process.env.S3_ENDPOINT, // Your Cloudflare R2 endpoint
       credentials: {
         accessKeyId: process.env.S3_ACCESS_KEY,
         secretAccessKey: process.env.S3_SECRET_KEY,
-      },
-      forcePathStyle: true, // Required for MinIO
+      }
     });
-    this.bucket = process.env.S3_BUCKET || 'sharebuddy';
+    this.bucket = process.env.S3_BUCKET;
   }
 
   async uploadFile(fileBuffer, originalName, contentType) {

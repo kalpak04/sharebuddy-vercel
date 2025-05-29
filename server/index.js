@@ -37,6 +37,7 @@ const upload = multer({
 }).single('file');
 const { pool, checkDatabaseHealth } = require('./db');
 const storageService = require('./services/storage');
+const fileRoutes = require('./routes/files');
 
 const app = express();
 app.use(helmet());
@@ -712,6 +713,9 @@ app.get('/health', async (req, res) => {
   
   res.json(status);
 });
+
+// Routes
+app.use('/api/files', fileRoutes);
 
 // Attach shutdown handlers
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
