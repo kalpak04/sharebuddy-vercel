@@ -44,8 +44,4 @@ services:
       mountPath: /data
       sizeGB: 10
     healthCheckPath: /minio/health/live
-    ports:
-      - port: 9000
-        protocol: TCP
-      - port: 9001
-        protocol: TCP 
+    port: 9000 
