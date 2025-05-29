@@ -35,8 +35,8 @@ const upload = multer({
     cb(null, true);
   }
 }).single('file');
-const ftpServer = require('./ftp-server');
 const { pool, checkDatabaseHealth } = require('./db');
+const storageService = require('./services/storage');
 
 const app = express();
 app.use(helmet());
@@ -589,6 +589,114 @@ app.post('/upload', authMiddleware, (req, res) => {
   });
 });
 
+// New upload endpoints
+app.post('/upload/request', authMiddleware, async (req, res) => {
+  try {
+    const { fileName, fileType, hostSocketId, fileSize } = req.body;
+    const userId = req.user.userId;
+
+    if (!fileName || !fileType || !hostSocketId || !fileSize) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Check host's reserved storage
+    const { rows: hostRows } = await pool.query('SELECT storage, user_id FROM hosts WHERE socket_id = $1', [hostSocketId]);
+    if (!hostRows[0]) {
+      return res.status(404).json({ error: 'Host not found.' });
+    }
+
+    const reservedStorage = (hostRows[0].storage || 0) * 1024 * 1024 * 1024; // Convert GB to bytes
+    
+    // Calculate used storage
+    const { rows: usedRows } = await pool.query(
+      'SELECT COALESCE(SUM(size), 0) AS used FROM files WHERE host_socket_id = $1',
+      [hostSocketId]
+    );
+    
+    const usedStorage = parseInt(usedRows[0].used, 10);
+    const availableStorage = reservedStorage - usedStorage;
+
+    if (fileSize > availableStorage) {
+      return res.status(400).json({ 
+        error: 'Not enough storage available on host.',
+        available: Math.floor(availableStorage / (1024 * 1024)) + 'MB',
+        required: Math.floor(fileSize / (1024 * 1024)) + 'MB'
+      });
+    }
+
+    // Generate upload URL
+    const { signedUrl, fileKey } = await storageService.generateUploadUrl(
+      fileName,
+      fileType,
+      userId,
+      hostSocketId
+    );
+
+    // Create pending file record
+    await pool.query(
+      'INSERT INTO files (user_id, host_socket_id, filename, size, path, status) VALUES ($1, $2, $3, $4, $5, $6)',
+      [userId, hostSocketId, fileName, fileSize, fileKey, 'pending']
+    );
+
+    res.json({ 
+      uploadUrl: signedUrl,
+      fileKey
+    });
+
+  } catch (error) {
+    console.error('Upload request error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate upload URL',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+});
+
+app.post('/upload/complete', authMiddleware, async (req, res) => {
+  try {
+    const { fileKey, hostSocketId } = req.body;
+    const userId = req.user.userId;
+
+    // Update file status
+    const { rows } = await pool.query(
+      'UPDATE files SET status = $1, uploaded_at = NOW() WHERE path = $2 AND user_id = $3 RETURNING id, filename, size',
+      ['completed', fileKey, userId]
+    );
+
+    if (!rows[0]) {
+      return res.status(404).json({ error: 'File record not found' });
+    }
+
+    // Generate download URL
+    const downloadUrl = await storageService.generateDownloadUrl(fileKey);
+
+    // Notify connected clients
+    io.to(hostSocketId).emit('file-transfer', {
+      fileId: rows[0].id,
+      filename: rows[0].filename,
+      size: rows[0].size,
+      path: fileKey,
+      userId: userId,
+      username: req.user.username,
+      downloadUrl,
+      timestamp: new Date().toISOString()
+    });
+
+    res.json({ 
+      message: 'Upload completed successfully',
+      fileId: rows[0].id,
+      downloadUrl
+    });
+
+  } catch (error) {
+    console.error('Upload completion error:', error);
+    res.status(500).json({ 
+      error: 'Failed to complete upload',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+});
+
 // Enhanced health check endpoint
 app.get('/health', async (req, res) => {
   const dbHealthy = await checkDatabaseHealth();
@@ -616,11 +724,6 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error',
     details: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
-});
-
-// Add before the app.listen() call
-ftpServer.on('error', (err) => {
-  console.error('FTP server error:', err);
 });
 
 // Export io for use in ftp-server.js

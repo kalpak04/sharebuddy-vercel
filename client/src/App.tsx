@@ -151,12 +151,12 @@ const App: React.FC = () => {
 
     s.on('connect', () => {
       console.log('Socket connected successfully');
-      setSocket(s);
-      s.on('hosts-update', setHosts);
-      s.on('renters-update', setRenters);
-      s.on(SIGNAL_EVENT, handleSignal);
-      s.on(REQUEST_EVENT, handleConnectionRequest);
-      s.on(RESPONSE_EVENT, handleConnectionResponse);
+    setSocket(s);
+    s.on('hosts-update', setHosts);
+    s.on('renters-update', setRenters);
+    s.on(SIGNAL_EVENT, handleSignal);
+    s.on(REQUEST_EVENT, handleConnectionRequest);
+    s.on(RESPONSE_EVENT, handleConnectionResponse);
     });
 
     return () => { 
